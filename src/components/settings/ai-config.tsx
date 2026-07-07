@@ -27,18 +27,19 @@ import {
 import { SettingsPanelHead } from './settings-panel-head';
 import { AiKnowledgeCard } from './ai-knowledge';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
+import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from '@/lib/ai/embeddings';
 import type { AiProvider } from '@/lib/ai/types';
 
 const MASKED_KEY = '••••••••••••••••';
 
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
-  anthropic: 'Anthropic (Claude)',
+  gemini: 'Google Gemini',
 };
 
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
-  anthropic: 'sk-ant-...',
+  gemini: 'AIza...',
 };
 
 export function AiConfig() {
@@ -114,7 +115,7 @@ export function AiConfig() {
     setProvider(next);
     const isDefaultModel =
       model === AI_PROVIDER_DEFAULT_MODEL.openai ||
-      model === AI_PROVIDER_DEFAULT_MODEL.anthropic ||
+      model === AI_PROVIDER_DEFAULT_MODEL.gemini ||
       model.trim() === '';
     if (isDefaultModel) setModel(AI_PROVIDER_DEFAULT_MODEL[next]);
   };
@@ -226,7 +227,7 @@ export function AiConfig() {
     <div>
       <SettingsPanelHead
         title="Agent setup"
-        description="Bring your own OpenAI or Anthropic key. wacrm calls the provider directly with your key — no per-seat AI fees, and your data stays yours. This powers AI-drafted replies in the inbox, the auto-reply bot, and the Playground."
+        description="Bring your own OpenAI or Google Gemini key. wacrm calls the provider directly with your key — no per-seat AI fees, and your data stays yours. This powers AI-drafted replies in the inbox, the auto-reply bot, and the Playground."
       />
 
       {!canEdit && (
@@ -260,9 +261,7 @@ export function AiConfig() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
-                    <SelectItem value="anthropic">
-                      {PROVIDER_LABEL.anthropic}
-                    </SelectItem>
+                    <SelectItem value="gemini">{PROVIDER_LABEL.gemini}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -350,14 +349,14 @@ export function AiConfig() {
                     setEmbeddingsKeyEdited(true);
                   }
                 }}
-                placeholder="sk-... (OpenAI)"
+                placeholder="AIza... (Google AI / Gemini)"
                 disabled={disabled}
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                An OpenAI key used only to embed your knowledge base
-                (text-embedding-3-small)
-                {provider === 'openai' ? ' — can be the same key as above' : ''}.
+                A Gemini API key used to embed your knowledge base (
+                {EMBEDDING_MODEL}, {EMBEDDING_DIMENSIONS} dimensions)
+                {provider === 'gemini' ? ' — can be the same key as above' : ''}.
                 Leave blank to use keyword search instead. Clear it to turn
                 semantic search off.
               </p>

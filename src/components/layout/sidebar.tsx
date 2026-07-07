@@ -101,9 +101,16 @@ const navItems: NavItem[] = [
   { href: "/agents", label: "AI Agents", icon: Bot },
 ];
 
-const bottomNavItems = [
+const bottomNavItems: NavItem[] = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+const PLATFORM_GUPSHUP =
+  process.env.NEXT_PUBLIC_WHATSAPP_PROVIDER === "gupshup";
+
+const platformAdminNavItems: NavItem[] = PLATFORM_GUPSHUP
+  ? [{ href: "/admin/gupshup", label: "Gupshup Admin", icon: Shield }]
+  : [];
 
 interface SidebarProps {
   /** Controlled on mobile by the Header's hamburger button. Ignored on lg+. */
@@ -268,6 +275,25 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           <div className="my-4 border-t border-border" />
 
           <ul className="flex flex-col gap-1">
+            {platformAdminNavItems.map((item) => {
+              const isActive = pathname.startsWith(item.href);
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
+                      isActive
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    <item.icon className="h-4 w-4" />
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
             {bottomNavItems.map((item) => {
               const isActive = pathname.startsWith(item.href);
               return (

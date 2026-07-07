@@ -61,6 +61,13 @@ interface WhatsAppMessage {
   context?: { id: string }
 }
 
+interface WebhookPayload {
+  entry?: WhatsAppWebhookEntry[]
+  /** Present on Gupshup Passthrough V3 callbacks. */
+  gs_app_id?: string
+  object?: string
+}
+
 interface WhatsAppWebhookEntry {
   id: string
   changes: Array<{
@@ -175,19 +182,21 @@ export async function POST(request: Request) {
   const rawBody = await request.text()
   const signature = request.headers.get('x-hub-signature-256')
 
-  if (!verifyMetaWebhookSignature(rawBody, signature)) {
+  let body: WebhookPayload
+  try {
+    body = JSON.parse(rawBody)
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const isGupshupV3 = Boolean(body.gs_app_id)
+
+  if (!isGupshupV3 && !verifyMetaWebhookSignature(rawBody, signature)) {
     // 401 (not 200) — we want Meta's delivery dashboard to show failures
     // loudly if a misconfiguration causes signatures to stop matching,
     // rather than silently eating events.
     console.warn('[webhook] rejected request with invalid signature')
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-  }
-
-  let body: { entry?: WhatsAppWebhookEntry[] }
-  try {
-    body = JSON.parse(rawBody)
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
   // Process AFTER the response so we ack Meta within their ~20s timeout
@@ -215,8 +224,56 @@ export async function POST(request: Request) {
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
-async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
+async function findWhatsappConfigForInbound(
+  phoneNumberId: string,
+  gsAppId?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any | null> {
+  if (phoneNumberId) {
+    const { data: byPhone, error } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('*')
+      .eq('phone_number_id', phoneNumberId)
+
+    if (error) {
+      console.error('Error fetching whatsapp_config for phone_number_id:', phoneNumberId, error)
+      return null
+    }
+    if (byPhone?.length === 1) return byPhone[0]
+    if (byPhone && byPhone.length > 1) {
+      console.error(
+        `Multiple configs (${byPhone.length}) for phone_number_id ${phoneNumberId} — inbound dropped`,
+      )
+      return null
+    }
+  }
+
+  if (gsAppId) {
+    const { data: byGs, error } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('*')
+      .eq('gs_app_id', gsAppId)
+
+    if (error) {
+      console.error('Error fetching whatsapp_config for gs_app_id:', gsAppId, error)
+      return null
+    }
+    if (byGs?.length === 1) return byGs[0]
+    if (byGs && byGs.length > 1) {
+      console.error(
+        `Multiple configs (${byGs.length}) for gs_app_id ${gsAppId} — inbound dropped`,
+      )
+      return null
+    }
+  }
+
+  return null
+}
+
+async function processWebhook(body: WebhookPayload) {
   if (!body.entry) return
+
+  const gsAppId = body.gs_app_id
 
   for (const entry of body.entry) {
     for (const change of entry.changes) {
@@ -247,42 +304,14 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const phoneNumberId = value.metadata.phone_number_id
 
-      // Find user's config by phone_number_id. `.single()` returns
-      // PGRST116 for both 0 rows AND ≥2 rows — distinguish them so
-      // operators see the real cause in logs. ≥2 rows shouldn't happen
-      // post-migration 013 (UNIQUE constraint), but a row created
-      // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await supabaseAdmin()
-        .from('whatsapp_config')
-        .select('*')
-        .eq('phone_number_id', phoneNumberId)
-
-      if (configError) {
+      const config = await findWhatsappConfigForInbound(phoneNumberId, gsAppId)
+      if (!config) {
         console.error(
-          'Error fetching whatsapp_config for phone_number_id:',
-          phoneNumberId,
-          configError
+          'No config found for inbound message:',
+          { phoneNumberId, gsAppId },
         )
         continue
       }
-
-      if (!configRows || configRows.length === 0) {
-        console.error('No config found for phone_number_id:', phoneNumberId)
-        continue
-      }
-
-      if (configRows.length > 1) {
-        console.error(
-          `Multiple configs (${configRows.length}) found for phone_number_id:`,
-          phoneNumberId,
-          '— inbound message dropped. Resolve duplicates so each number maps to a single account.',
-          'Account owners:',
-          configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
-        )
-        continue
-      }
-
-      const config = configRows[0]
 
       const decryptedAccessToken = decrypt(config.access_token)
 

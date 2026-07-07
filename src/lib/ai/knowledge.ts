@@ -110,7 +110,9 @@ export async function retrieveKnowledge(
   // Semantic path.
   if (config.embeddingsApiKey) {
     try {
-      const [queryEmbedding] = await embedTexts(config.embeddingsApiKey, [query])
+      const [queryEmbedding] = await embedTexts(config.embeddingsApiKey, [query], {
+        taskType: 'RETRIEVAL_QUERY',
+      })
       if (queryEmbedding) {
         const { data, error } = await db.rpc('match_ai_knowledge_semantic', {
           p_account_id: accountId,

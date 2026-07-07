@@ -21,7 +21,8 @@ const ALLOWED: ReadonlyArray<MessageTemplateStatus> = [
  */
 export function normalizeStatus(raw: string): MessageTemplateStatus {
   const upper = (raw ?? '').toUpperCase()
-  if (upper === 'PENDING_REVIEW') return 'PENDING'
+  if (upper === 'PENDING_REVIEW' || upper === 'SUBMITTED') return 'PENDING'
+  if (upper === 'DEACTIVATED') return 'DISABLED'
   return (ALLOWED as readonly string[]).includes(upper)
     ? (upper as MessageTemplateStatus)
     : 'PENDING'

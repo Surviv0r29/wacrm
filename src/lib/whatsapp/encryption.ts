@@ -33,12 +33,28 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!
 const GCM_IV_LENGTH = 12
 const CBC_IV_LENGTH = 16
 const AUTH_TAG_LENGTH = 16
+const AES_KEY_BYTES = 32
+
+function encryptionKeyBuffer(): Buffer {
+  if (!ENCRYPTION_KEY?.trim()) {
+    throw new Error(
+      'ENCRYPTION_KEY is not set — add a 64-character hex string to your environment (see .env.local.example)',
+    )
+  }
+  const key = Buffer.from(ENCRYPTION_KEY, 'hex')
+  if (key.length !== AES_KEY_BYTES) {
+    throw new Error(
+      `ENCRYPTION_KEY must decode to ${AES_KEY_BYTES} bytes (${AES_KEY_BYTES * 2} hex chars); got ${key.length} bytes — generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+    )
+  }
+  return key
+}
 
 export function encrypt(text: string): string {
   const iv = crypto.randomBytes(GCM_IV_LENGTH)
   const cipher = crypto.createCipheriv(
     'aes-256-gcm',
-    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    encryptionKeyBuffer(),
     iv,
   )
   let encrypted = cipher.update(text, 'utf8', 'hex')
@@ -67,7 +83,7 @@ export function decrypt(encryptedText: string): string {
     }
     const decipher = crypto.createDecipheriv(
       'aes-256-gcm',
-      Buffer.from(ENCRYPTION_KEY, 'hex'),
+      encryptionKeyBuffer(),
       iv,
     )
     decipher.setAuthTag(authTag)
@@ -87,7 +103,7 @@ export function decrypt(encryptedText: string): string {
     }
     const decipher = crypto.createDecipheriv(
       'aes-256-cbc',
-      Buffer.from(ENCRYPTION_KEY, 'hex'),
+      encryptionKeyBuffer(),
       iv,
     )
     let decrypted = decipher.update(ctHex, 'hex', 'utf8')

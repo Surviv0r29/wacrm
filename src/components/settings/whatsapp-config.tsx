@@ -31,6 +31,8 @@ import {
 import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
+const PLATFORM_GUPSHUP =
+  process.env.NEXT_PUBLIC_WHATSAPP_PROVIDER === 'gupshup';
 
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
@@ -374,11 +376,55 @@ export function WhatsAppConfig() {
       <section className="animate-in fade-in-50 duration-200">
         <SettingsPanelHead
           title="WhatsApp connection"
-          description="Connect your Meta WhatsApp Business API. Credentials, webhook, and setup steps all live here."
+          description="Your WhatsApp Business number for inbox, broadcasts, and automations."
         />
         <div className="flex items-center justify-center py-12">
           <Loader2 className="size-6 animate-spin text-primary" />
         </div>
+      </section>
+    );
+  }
+
+  const isGupshupManaged =
+    config?.provider === 'gupshup' || (PLATFORM_GUPSHUP && !config);
+
+  if (isGupshupManaged) {
+    const displayNumber =
+      config?.display_phone_number ?? config?.phone_number_id ?? '—';
+    return (
+      <section className="animate-in fade-in-50 duration-200">
+        <SettingsPanelHead
+          title="WhatsApp connection"
+          description="Your WhatsApp number is provisioned by the platform administrator."
+        />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground flex items-center gap-2">
+              {connectionStatus === 'connected' ? (
+                <CheckCircle2 className="size-5 text-primary" />
+              ) : (
+                <XCircle className="size-5 text-red-500" />
+              )}
+              {connectionStatus === 'connected' ? 'Connected' : 'Not connected'}
+            </CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {config
+                ? 'This account uses Gupshup for WhatsApp messaging. Contact your administrator to change the assigned number.'
+                : 'No WhatsApp number has been assigned to your account yet.'}
+            </CardDescription>
+          </CardHeader>
+          {config && (
+            <CardContent className="space-y-3 text-sm">
+              <div>
+                <span className="text-muted-foreground">Phone number</span>
+                <p className="font-medium text-foreground">{displayNumber}</p>
+              </div>
+              {statusMessage && connectionStatus !== 'connected' && (
+                <p className="text-amber-200/90">{statusMessage}</p>
+              )}
+            </CardContent>
+          )}
+        </Card>
       </section>
     );
   }

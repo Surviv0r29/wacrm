@@ -7,6 +7,7 @@ import {
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -87,7 +88,9 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select(
+        'phone_number_id, access_token, status, provider, display_phone_number, gupshup_app_id, gs_app_id, registered_at',
+      )
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -104,10 +107,52 @@ export async function GET() {
         {
           connected: false,
           reason: 'no_config',
-          message: 'No WhatsApp configuration saved yet. Fill in the form and click Save Configuration.',
+          message:
+            process.env.WHATSAPP_PROVIDER === 'gupshup'
+              ? 'WhatsApp has not been assigned to your account yet. Contact your administrator.'
+              : 'No WhatsApp configuration saved yet. Fill in the form and click Save Configuration.',
         },
-        { status: 200 }
+        { status: 200 },
       )
+    }
+
+    if (isGupshupProvider(config.provider)) {
+      try {
+        decrypt(config.access_token)
+      } catch (err) {
+        console.error('[whatsapp/config GET] Gupshup token decryption failed:', err)
+        return NextResponse.json(
+          {
+            connected: false,
+            reason: 'token_corrupted',
+            needs_reset: true,
+            provider: 'gupshup',
+            message:
+              'The stored Gupshup API key cannot be decrypted. Contact your administrator to re-assign the number.',
+          },
+          { status: 200 },
+        )
+      }
+
+      const connected = config.status === 'connected'
+      return NextResponse.json({
+        connected,
+        provider: 'gupshup',
+        display_phone_number: config.display_phone_number,
+        phone_number_id: config.phone_number_id,
+        gupshup_app_id: config.gupshup_app_id,
+        registered_at: config.registered_at,
+        phone_info: connected
+          ? {
+              id: config.phone_number_id,
+              display_phone_number:
+                config.display_phone_number ?? config.phone_number_id,
+            }
+          : undefined,
+        message: connected
+          ? undefined
+          : 'WhatsApp number is assigned but marked disconnected.',
+      })
     }
 
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.

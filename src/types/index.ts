@@ -230,6 +230,8 @@ export interface MessageReaction {
   created_at: string;
 }
 
+export type WhatsAppProvider = 'meta' | 'gupshup'
+
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
@@ -239,6 +241,10 @@ export interface WhatsAppConfig {
   verify_token?: string;
   status: 'connected' | 'disconnected';
   connected_at?: string;
+  provider?: WhatsAppProvider;
+  gupshup_app_id?: string;
+  gs_app_id?: string;
+  display_phone_number?: string;
   /**
    * Set when POST /{phone_number_id}/register last succeeded. NULL
    * means the number was saved but never actually subscribed for

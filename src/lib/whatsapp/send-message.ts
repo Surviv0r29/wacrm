@@ -27,6 +27,16 @@ import {
   sendMediaMessage,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
+import {
+  sendGupshupTextMessage,
+  sendGupshupMediaMessage,
+  type GupshupMediaKind,
+} from '@/lib/whatsapp/gupshup-api';
+import {
+  gupshupContextMessageId,
+  resolveGupshupAppCredentials,
+} from '@/lib/whatsapp/gupshup-auth';
+import { isGupshupProvider } from '@/lib/whatsapp/provider-mode';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
@@ -210,7 +220,9 @@ export async function sendMessageToConversation(
     );
   }
 
-  const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
+  const sanitizedPhone = sanitizePhoneForMeta(
+    (contact.phone_normalized as string | undefined) || contact.phone,
+  );
   if (!isValidE164(sanitizedPhone)) {
     throw new SendMessageError(
       'bad_request',
@@ -280,6 +292,8 @@ export async function sendMessageToConversation(
     }
   }
 
+  const gupshupReplyContext = gupshupContextMessageId(contextMessageId);
+
   // Template row (for header + button components). isMessageTemplate
   // guards against a malformed local row crashing the send-builder.
   let templateRow: MessageTemplate | null = null;
@@ -302,6 +316,65 @@ export async function sendMessageToConversation(
   }
 
   const attempt = async (phone: string): Promise<string> => {
+    if (isGupshupProvider(config.provider)) {
+      if (messageType === 'template') {
+        throw new SendMessageError(
+          'unsupported_message_type',
+          'Template sends via Gupshup are not wired yet — use session messages while the 24-hour window is open.',
+          400,
+        );
+      }
+
+      let appId: string;
+      let apiToken: string;
+      try {
+        ({ appId, apiToken } = await resolveGupshupAppCredentials({
+          gupshup_app_id: config.gupshup_app_id,
+          gs_app_id: config.gs_app_id,
+          access_token: config.access_token,
+        }));
+      } catch (err) {
+        throw new SendMessageError(
+          'whatsapp_not_configured',
+          err instanceof Error ? err.message : 'Gupshup credentials invalid',
+          400,
+        );
+      }
+
+      if (messageType === 'text') {
+        const result = await sendGupshupTextMessage({
+          appId,
+          apiToken,
+          to: phone,
+          text: contentText!,
+          contextMessageId: gupshupReplyContext,
+        });
+        return result.messageId;
+      }
+
+      if (isMediaKind) {
+        const result = await sendGupshupMediaMessage({
+          appId,
+          apiToken,
+          to: phone,
+          kind: messageType as GupshupMediaKind,
+          link: mediaUrl!,
+          caption:
+            messageType !== 'audio' ? contentText || undefined : undefined,
+          filename:
+            messageType === 'document' ? filename || undefined : undefined,
+          contextMessageId: gupshupReplyContext,
+        });
+        return result.messageId;
+      }
+
+      throw new SendMessageError(
+        'unsupported_message_type',
+        `Unsupported message type "${messageType}" for Gupshup.`,
+        400,
+      );
+    }
+
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
@@ -345,7 +418,9 @@ export async function sendMessageToConversation(
   let waMessageId = '';
   let workingPhone = sanitizedPhone;
   try {
-    const variants = phoneVariants(sanitizedPhone);
+    const variants = isGupshupProvider(config.provider)
+      ? [sanitizedPhone]
+      : phoneVariants(sanitizedPhone);
     let lastError: unknown = null;
 
     for (const variant of variants) {
@@ -369,9 +444,13 @@ export async function sendMessageToConversation(
     if (lastError) throw lastError;
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : 'Unknown Meta API error';
-    console.error('[send-message] Meta send failed for all variants:', message);
-    throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+      err instanceof Error ? err.message : 'Unknown WhatsApp API error';
+    console.error('[send-message] WhatsApp send failed for all variants:', message);
+    throw new SendMessageError(
+      isGupshupProvider(config.provider) ? 'gupshup_error' : 'meta_error',
+      `WhatsApp API error: ${message}`,
+      502,
+    );
   }
 
   if (workingPhone !== sanitizedPhone) {

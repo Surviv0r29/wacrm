@@ -3,27 +3,34 @@ import { aiRequestTimeoutMs } from './defaults'
 import { providerHttpError, toNetworkError } from './providers/shared'
 
 // ============================================================
-// Embeddings (OpenAI-compatible).
+// Embeddings (Gemini).
 //
 // Used for the knowledge base's optional semantic-search path: embed
-// each chunk at ingest, and embed the query at retrieval. Anthropic has
-// no embeddings endpoint, so this is always OpenAI's — the account
-// supplies a (possibly separate) embeddings key. 1536-dim
-// text-embedding-3-small matches the `vector(1536)` column in
-// migration 030.
+// each chunk at ingest, and embed the query at retrieval. Accounts
+// supply a Gemini API key (possibly the same as the chat key). 1536-dim
+// output matches the `vector(1536)` column in migration 030.
 // ============================================================
 
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings'
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
+const EMBEDDING_MODEL = 'gemini-embedding-001'
 
-export const EMBEDDING_MODEL = 'text-embedding-3-small'
 export const EMBEDDING_DIMENSIONS = 1536
 
-// OpenAI accepts an array input; keep batches modest so a big re-index
-// stays under request-size limits and partial failures are cheap.
+// Keep the export name for callers that reference the model id.
+export { EMBEDDING_MODEL }
+
 const BATCH_SIZE = 96
 
-interface EmbeddingResponse {
-  data?: { embedding?: number[]; index?: number }[]
+interface GeminiEmbedResponse {
+  embedding?: { values?: number[] }
+}
+
+interface GeminiBatchEmbedResponse {
+  embeddings?: { values?: number[] }[]
+}
+
+function embeddingModelPath(): string {
+  return `models/${EMBEDDING_MODEL}`
 }
 
 /** Format a vector for a pgvector column / RPC param: `[0.1,0.2,...]`.
@@ -31,6 +38,99 @@ interface EmbeddingResponse {
  *  not cast reliably. */
 export function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(',')}]`
+}
+
+async function embedOne(
+  apiKey: string,
+  text: string,
+  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY',
+  timeoutMs: number,
+): Promise<number[]> {
+  const url = `${GEMINI_API_BASE}/${embeddingModelPath()}:embedContent`
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+        taskType,
+        outputDimensionality: EMBEDDING_DIMENSIONS,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    throw toNetworkError(err)
+  }
+
+  if (!res.ok) {
+    throw await providerHttpError('Gemini embeddings', res)
+  }
+
+  const data = (await res.json().catch(() => null)) as GeminiEmbedResponse | null
+  const values = data?.embedding?.values
+  if (!Array.isArray(values) || values.length !== EMBEDDING_DIMENSIONS) {
+    throw new AiError('Embeddings response was malformed.', {
+      code: 'embeddings_malformed',
+    })
+  }
+  return values
+}
+
+async function embedBatch(
+  apiKey: string,
+  inputs: string[],
+  timeoutMs: number,
+): Promise<number[][]> {
+  const url = `${GEMINI_API_BASE}/${embeddingModelPath()}:batchEmbedContents`
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requests: inputs.map((text) => ({
+          model: embeddingModelPath(),
+          content: { parts: [{ text }] },
+          taskType: 'RETRIEVAL_DOCUMENT',
+          outputDimensionality: EMBEDDING_DIMENSIONS,
+        })),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    throw toNetworkError(err)
+  }
+
+  if (!res.ok) {
+    throw await providerHttpError('Gemini embeddings', res)
+  }
+
+  const data = (await res.json().catch(() => null)) as GeminiBatchEmbedResponse | null
+  const rows = data?.embeddings
+  if (!rows || rows.length !== inputs.length) {
+    throw new AiError('Embeddings response was malformed.', {
+      code: 'embeddings_malformed',
+    })
+  }
+
+  return rows.map((row) => {
+    const values = row.values
+    if (!Array.isArray(values) || values.length !== EMBEDDING_DIMENSIONS) {
+      throw new AiError('Embeddings response missing a vector.', {
+        code: 'embeddings_malformed',
+      })
+    }
+    return values
+  })
 }
 
 /**
@@ -41,58 +141,23 @@ export function toVectorLiteral(embedding: number[]): string {
 export async function embedTexts(
   apiKey: string,
   inputs: string[],
+  opts: { taskType?: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' } = {},
 ): Promise<number[][]> {
   if (inputs.length === 0) return []
   const timeoutMs = aiRequestTimeoutMs()
-  const out: number[][] = []
+  const taskType = opts.taskType ?? 'RETRIEVAL_DOCUMENT'
 
+  if (inputs.length === 1 && taskType === 'RETRIEVAL_QUERY') {
+    return [await embedOne(apiKey, inputs[0], taskType, timeoutMs)]
+  }
+
+  const out: number[][] = []
   for (let start = 0; start < inputs.length; start += BATCH_SIZE) {
     const batch = inputs.slice(start, start + BATCH_SIZE)
-
-    let res: Response
-    try {
-      res = await fetch(OPENAI_EMBEDDINGS_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-    } catch (err) {
-      throw toNetworkError(err)
-    }
-
-    if (!res.ok) {
-      throw await providerHttpError('OpenAI embeddings', res)
-    }
-
-    const data = (await res.json().catch(() => null)) as EmbeddingResponse | null
-    const rows = data?.data
-    if (!rows || rows.length !== batch.length) {
-      throw new AiError('Embeddings response was malformed.', {
-        code: 'embeddings_malformed',
-      })
-    }
-
-    // Sort by index so order matches the input batch regardless of how
-    // the provider returns them. Require a real numeric index — defaulting
-    // a missing one to 0 would silently misalign chunks with their
-    // vectors (chunk N gets chunk M's embedding), so fail loud instead.
-    if (rows.some((r) => typeof r.index !== 'number')) {
-      throw new AiError('Embeddings response was missing result indices.', {
-        code: 'embeddings_malformed',
-      })
-    }
-    const ordered = [...rows].sort((a, b) => a.index! - b.index!)
-    for (const r of ordered) {
-      if (!Array.isArray(r.embedding)) {
-        throw new AiError('Embeddings response missing a vector.', {
-          code: 'embeddings_malformed',
-        })
-      }
-      out.push(r.embedding)
+    if (batch.length === 1) {
+      out.push(await embedOne(apiKey, batch[0], taskType, timeoutMs))
+    } else {
+      out.push(...(await embedBatch(apiKey, batch, timeoutMs)))
     }
   }
 

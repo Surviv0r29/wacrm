@@ -107,35 +107,39 @@ describe('generateReply — OpenAI', () => {
   })
 })
 
-describe('generateReply — Anthropic', () => {
-  it('calls the messages endpoint with the version header and parses text blocks', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(okResponse({ content: [{ type: 'text', text: 'Hi there!' }] }))
+describe('generateReply — Gemini', () => {
+  it('calls generateContent with the API key header and parses text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({
+        candidates: [{ content: { parts: [{ text: 'Hi there!' }] } }],
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     const res = await generateReply({
-      config: config({ provider: 'anthropic', apiKey: 'sk-ant-x' }),
+      config: config({ provider: 'gemini', apiKey: 'AIza-test', model: 'gemini-2.0-flash' }),
       systemPrompt: 'sys',
       messages: [{ role: 'user', content: 'Hello' }],
     })
 
     expect(res).toEqual({ text: 'Hi there!', handoff: false })
     const [url, opts] = fetchMock.mock.calls[0]
-    expect(url).toContain('api.anthropic.com')
-    expect(opts.headers['x-api-key']).toBe('sk-ant-x')
-    expect(opts.headers['anthropic-version']).toBeTruthy()
+    expect(url).toContain('generativelanguage.googleapis.com')
+    expect(url).toContain('gemini-2.0-flash:generateContent')
+    expect(opts.headers['x-goog-api-key']).toBe('AIza-test')
   })
 
   it('detects handoff in the model output', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
-        okResponse({ content: [{ type: 'text', text: '[[HANDOFF]]' }] }),
+        okResponse({
+          candidates: [{ content: { parts: [{ text: '[[HANDOFF]]' }] } }],
+        }),
       ),
     )
     const res = await generateReply({
-      config: config({ provider: 'anthropic' }),
+      config: config({ provider: 'gemini' }),
       systemPrompt: 'sys',
       messages: [{ role: 'user', content: 'I want to speak to a person' }],
     })
@@ -143,14 +147,16 @@ describe('generateReply — Anthropic', () => {
     expect(res.text).toBe('')
   })
 
-  it('drops a leading assistant turn so the payload starts on the customer', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(okResponse({ content: [{ type: 'text', text: 'ok' }] }))
+  it('maps assistant turns to model role in the payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({
+        candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     await generateReply({
-      config: config({ provider: 'anthropic' }),
+      config: config({ provider: 'gemini' }),
       systemPrompt: 'sys',
       messages: [
         { role: 'assistant', content: 'Welcome!' },
@@ -159,7 +165,7 @@ describe('generateReply — Anthropic', () => {
     })
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
-    expect(body.messages[0].role).toBe('user')
-    expect(body.messages).toHaveLength(1)
+    expect(body.contents[0].role).toBe('model')
+    expect(body.contents[1].role).toBe('user')
   })
 })

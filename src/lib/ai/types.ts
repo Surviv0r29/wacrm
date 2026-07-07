@@ -3,10 +3,10 @@
 //
 // One small provider-agnostic surface so the inbox draft route and the
 // inbound auto-reply bot both talk to `generateReply` without caring
-// whether the account is on OpenAI or Anthropic.
+// whether the account is on OpenAI or Gemini.
 // ============================================================
 
-export type AiProvider = 'openai' | 'anthropic'
+export type AiProvider = 'openai' | 'gemini'
 
 /**
  * Account AI setup, decrypted and ready to use. Produced by
@@ -21,8 +21,8 @@ export interface AiConfig {
   isActive: boolean
   autoReplyEnabled: boolean
   autoReplyMaxPerConversation: number
-  /** Optional OpenAI-compatible key for embeddings. When set, the
-   *  knowledge base is embedded and semantic retrieval turns on; when
+  /** Optional Gemini API key for embeddings (semantic KB search). When
+   *  set, the knowledge base is embedded with gemini-embedding-001; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
 }

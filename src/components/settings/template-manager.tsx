@@ -110,6 +110,24 @@ const COMMON_LANGUAGE_CODES = [
   'lt',
 ];
 
+const PLATFORM_GUPSHUP =
+  process.env.NEXT_PUBLIC_WHATSAPP_PROVIDER === 'gupshup';
+
+type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
+
+function matchesStatusFilter(
+  status: string | undefined,
+  filter: StatusFilter,
+): boolean {
+  const key = status || 'DRAFT';
+  if (filter === 'all') return true;
+  if (filter === 'pending') {
+    return key === 'PENDING' || key === 'IN_APPEAL' || key === 'DRAFT';
+  }
+  if (filter === 'approved') return key === 'APPROVED';
+  return key === 'REJECTED' || key === 'PAUSED' || key === 'DISABLED';
+}
+
 function emptyButton(type: TemplateButton['type']): TemplateButton {
   switch (type) {
     case 'QUICK_REPLY':
@@ -125,10 +143,11 @@ function emptyButton(type: TemplateButton['type']): TemplateButton {
 
 export function TemplateManager() {
   const supabase = createClient();
-  const { user, loading: authLoading } = useAuth();
+  const { user, accountId, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -177,21 +196,39 @@ export function TemplateManager() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!user || !accountId) {
       setLoading(false);
       return;
     }
-    fetchTemplates(user.id);
+    fetchTemplates(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, [authLoading, user?.id, accountId]);
 
-  async function fetchTemplates(userId: string) {
+  const filteredTemplates = useMemo(
+    () => templates.filter((t) => matchesStatusFilter(t.status, statusFilter)),
+    [templates, statusFilter],
+  );
+
+  const statusCounts = useMemo(() => {
+    const pending = templates.filter((t) =>
+      matchesStatusFilter(t.status, 'pending'),
+    ).length;
+    const approved = templates.filter((t) =>
+      matchesStatusFilter(t.status, 'approved'),
+    ).length;
+    const rejected = templates.filter((t) =>
+      matchesStatusFilter(t.status, 'rejected'),
+    ).length;
+    return { all: templates.length, pending, approved, rejected };
+  }, [templates]);
+
+  async function fetchTemplates(acctId: string) {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('message_templates')
         .select('*')
-        .eq('user_id', userId)
+        .eq('account_id', acctId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setTemplates(data || []);
@@ -278,7 +315,7 @@ export function TemplateManager() {
       }
       // Refresh first, then close — re-opening the dialog
       // immediately should not show a stale list.
-      if (user) await fetchTemplates(user.id);
+      if (user && accountId) await fetchTemplates(accountId);
       toast.success(
         data.dry_run
           ? isEdit
@@ -300,7 +337,7 @@ export function TemplateManager() {
   }
 
   async function handleSyncFromMeta() {
-    if (!user) return;
+    if (!user || !accountId) return;
     setSyncing(true);
     try {
       const res = await fetch('/api/whatsapp/templates/sync', { method: 'POST' });
@@ -308,11 +345,17 @@ export function TemplateManager() {
       if (!res.ok) {
         throw new Error(data?.error || `Sync failed (HTTP ${res.status})`);
       }
+      const source = data.provider === 'gupshup' ? 'Gupshup' : 'Meta';
+      const pendingNote =
+        typeof data.pending === 'number' && data.pending > 0
+          ? ` · ${data.pending} pending review`
+          : '';
       toast.success(
-        `Synced ${data.total} template${data.total === 1 ? '' : 's'} from Meta` +
+        `Synced ${data.total} template${data.total === 1 ? '' : 's'} from ${source}` +
           (data.inserted || data.updated
             ? ` (${data.inserted} new, ${data.updated} updated)`
-            : ''),
+            : '') +
+          pendingNote,
       );
       if (Array.isArray(data.errors) && data.errors.length > 0) {
         const preview = data.errors.slice(0, 3).map(
@@ -332,7 +375,7 @@ export function TemplateManager() {
           { duration: 10000 },
         );
       }
-      await fetchTemplates(user.id);
+      await fetchTemplates(accountId);
     } catch (err) {
       console.error('Template sync error:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to sync templates');
@@ -484,7 +527,9 @@ export function TemplateManager() {
       <SettingsPanelHead
         title="Message templates"
         description={
-          'Create templates and submit them to Meta for approval. Use "Sync from Meta" to pull templates approved elsewhere.'
+          PLATFORM_GUPSHUP
+            ? 'Sync templates from your assigned Gupshup app. Pending and rejected templates are included — only approved templates can be sent.'
+            : 'Create templates and submit them to Meta for approval. Use "Sync from Meta" to pull templates approved elsewhere.'
         }
         action={
           <div className="flex items-center gap-2">
@@ -492,31 +537,75 @@ export function TemplateManager() {
               variant="outline"
               onClick={handleSyncFromMeta}
               disabled={syncing}
-              title="Pull approved templates from your Meta WhatsApp Business Account"
+              title={
+                PLATFORM_GUPSHUP
+                  ? 'Pull all templates from Gupshup (approved, pending, rejected)'
+                  : 'Pull templates from your Meta WhatsApp Business Account'
+              }
             >
               <RefreshCw className={`size-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing…' : 'Sync from Meta'}
+              {syncing
+                ? 'Syncing…'
+                : PLATFORM_GUPSHUP
+                  ? 'Sync from Gupshup'
+                  : 'Sync from Meta'}
             </Button>
-            <Button onClick={openCreate}>
-              <Plus className="size-4" />
-              New Template
-            </Button>
+            {!PLATFORM_GUPSHUP ? (
+              <Button onClick={openCreate}>
+                <Plus className="size-4" />
+                New Template
+              </Button>
+            ) : null}
           </div>
         }
       />
 
-      {templates.length === 0 ? (
+      {templates.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['all', 'All'],
+              ['pending', 'Pending'],
+              ['approved', 'Approved'],
+              ['rejected', 'Rejected'],
+            ] as const
+          ).map(([key, label]) => (
+            <Button
+              key={key}
+              type="button"
+              size="sm"
+              variant={statusFilter === key ? 'default' : 'outline'}
+              onClick={() => setStatusFilter(key)}
+            >
+              {label}
+              <span className="ml-1.5 text-xs opacity-70">
+                {statusCounts[key]}
+              </span>
+            </Button>
+          ))}
+        </div>
+      ) : null}
+
+      {filteredTemplates.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <p className="text-muted-foreground text-sm">No templates yet.</p>
+            <p className="text-muted-foreground text-sm">
+              {templates.length === 0
+                ? 'No templates yet.'
+                : 'No templates match this filter.'}
+            </p>
             <p className="text-muted-foreground text-xs mt-1">
-              Create your first message template to get started.
+              {templates.length === 0
+                ? PLATFORM_GUPSHUP
+                  ? 'Click "Sync from Gupshup" to pull templates for this account.'
+                  : 'Create your first message template to get started.'
+                : 'Try another status filter.'}
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-3 xl:grid-cols-2">
-          {templates.map((template) => {
+          {filteredTemplates.map((template) => {
             const statusKey = template.status || 'DRAFT';
             const status = templateStatusConfig[statusKey];
             return (

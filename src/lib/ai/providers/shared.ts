@@ -1,7 +1,7 @@
 import { AiError, type ChatMessage } from '../types'
 
 // ============================================================
-// Bits shared by the OpenAI + Anthropic adapters.
+// Bits shared by the OpenAI + Gemini adapters.
 // ============================================================
 
 export interface ProviderArgs {
@@ -68,8 +68,7 @@ export async function providerHttpError(
 
 /**
  * Collapse consecutive same-role turns into one (joined with blank
- * lines). Anthropic requires strictly alternating roles; merging is
- * also harmless for OpenAI and keeps the transcript compact.
+ * lines). Also keeps the transcript compact for both providers.
  */
 export function mergeConsecutive(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = []

@@ -434,7 +434,7 @@ export function MessageComposer({
           />
         </div>
       )}
-      {sessionExpired && (
+      {sessionExpired ? (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-400">
             24-hour session expired. Use a template to re-engage.
@@ -449,7 +449,14 @@ export function MessageComposer({
             Templates
           </Button>
         </div>
-      )}
+      ) : !readOnly ? (
+        <div className="mb-2 rounded-lg bg-primary/10 px-3 py-2">
+          <p className="text-xs text-primary">
+            Session open — send text, photos, video, documents, or voice notes.
+            Templates are only needed after 24 hours without a customer reply.
+          </p>
+        </div>
+      ) : null}
 
       {/* Hidden file inputs driven by the attach menu. */}
       <input

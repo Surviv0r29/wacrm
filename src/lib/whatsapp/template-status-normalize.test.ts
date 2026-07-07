@@ -13,6 +13,10 @@ describe('normalizeStatus', () => {
   it('maps PENDING_REVIEW → PENDING', () => {
     expect(normalizeStatus('PENDING_REVIEW')).toBe('PENDING');
   });
+  it('maps Gupshup SUBMITTED → PENDING and DEACTIVATED → DISABLED', () => {
+    expect(normalizeStatus('SUBMITTED')).toBe('PENDING');
+    expect(normalizeStatus('DEACTIVATED')).toBe('DISABLED');
+  });
   it('falls back to PENDING for unknown values (so the row is still visible)', () => {
     expect(normalizeStatus('SOMETHING_NEW')).toBe('PENDING');
     expect(normalizeStatus('')).toBe('PENDING');
