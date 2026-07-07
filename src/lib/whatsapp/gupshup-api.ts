@@ -83,6 +83,10 @@ async function parseGupshupSendResponse(
       extractGupshupErrorMessage(data, 'Gupshup returned no message id'),
     )
   }
+  console.log(
+    '[gupshup-api] send ok',
+    JSON.stringify({ status: response.status, message_id: messageId }),
+  )
   return { messageId }
 }
 

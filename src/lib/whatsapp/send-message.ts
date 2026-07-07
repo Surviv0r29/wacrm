@@ -453,6 +453,17 @@ export async function sendMessageToConversation(
     );
   }
 
+  console.log(
+    '[send-message] sent',
+    JSON.stringify({
+      provider: config.provider ?? 'meta',
+      conversation_id: conversationId,
+      type: messageType,
+      message_id: waMessageId,
+      to: workingPhone,
+    }),
+  );
+
   if (workingPhone !== sanitizedPhone) {
     console.log(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`

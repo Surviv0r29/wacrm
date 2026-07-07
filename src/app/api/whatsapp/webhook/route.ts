@@ -183,6 +183,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
+  const entryCount = body.entry?.length ?? 0
+  const changeCount =
+    body.entry?.reduce((n, e) => n + (e.changes?.length ?? 0), 0) ?? 0
+  console.log(
+    '[webhook] POST received',
+    JSON.stringify({
+      gs_app_id: body.gs_app_id ?? null,
+      object: body.object ?? null,
+      entryCount,
+      changeCount,
+    }),
+  )
+
   // Process AFTER the response so we ack Meta within their ~20s timeout
   // (a slow ack triggers Meta retries + duplicate inserts), while still
   // guaranteeing the work runs to completion.
@@ -255,7 +268,13 @@ async function findWhatsappConfigForInbound(
 }
 
 async function processWebhook(body: WebhookPayload) {
-  if (!body.entry) return
+  if (!body.entry) {
+    console.warn(
+      '[webhook] payload has no entry[] — dropped',
+      JSON.stringify({ gs_app_id: body.gs_app_id ?? null, object: body.object ?? null }),
+    )
+    return
+  }
 
   const gsAppId = body.gs_app_id
 
@@ -302,6 +321,18 @@ async function processWebhook(body: WebhookPayload) {
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
         const contact = value.contacts[i] || value.contacts[0]
+
+        console.log(
+          '[webhook] inbound message',
+          JSON.stringify({
+            gs_app_id: gsAppId ?? null,
+            phone_number_id: phoneNumberId,
+            account_id: config.account_id,
+            from: contact.wa_id,
+            type: message.type,
+            message_id: message.id,
+          }),
+        )
 
         await processMessage(
           message,
