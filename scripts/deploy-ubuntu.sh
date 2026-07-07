@@ -44,9 +44,17 @@ require_root() {
   fi
 }
 
+apt_update() {
+  if apt-get update -qq 2>/dev/null; then
+    return 0
+  fi
+  log "Retrying apt update (allowing changed repository metadata)…"
+  apt-get update -qq --allow-releaseinfo-change
+}
+
 install_system_deps() {
   log "Updating apt and installing base packages…"
-  apt-get update -qq
+  apt_update
   apt-get install -y curl ca-certificates gnupg nginx rsync
 
   if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q "v${NODE_MAJOR}"; then
