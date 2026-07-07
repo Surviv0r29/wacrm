@@ -101,8 +101,10 @@ build_app() {
     cd '$APP_DIR'
     # Do not set NODE_ENV=production here — npm would skip devDependencies
     # (@tailwindcss/postcss, tailwindcss) that Next.js needs to compile CSS.
+    rm -rf .next
     npm ci
     npm run build
+    test -f .next/BUILD_ID || { echo 'Build finished but .next/BUILD_ID is missing'; exit 1; }
     npm prune --omit=dev
   "
 
@@ -117,6 +119,8 @@ build_app() {
 }
 
 start_pm2() {
+  [[ -f "$APP_DIR/.next/BUILD_ID" ]] || die "No production build at $APP_DIR/.next — run build first"
+
   log "Starting app with PM2 on port $APP_PORT…"
   sudo -u "$APP_USER" bash -lc "
     set -euo pipefail
