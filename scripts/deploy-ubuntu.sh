@@ -45,11 +45,9 @@ require_root() {
 }
 
 apt_update() {
-  if apt-get update -qq 2>/dev/null; then
-    return 0
-  fi
-  log "Retrying apt update (allowing changed repository metadata)…"
-  apt-get update -qq --allow-releaseinfo-change
+  # Handles stale PPAs (e.g. ondrej/php label change on Jammy).
+  apt-get update -qq --allow-releaseinfo-change 2>/dev/null \
+    || apt-get update -qq
 }
 
 install_system_deps() {
@@ -101,9 +99,11 @@ build_app() {
   sudo -u "$APP_USER" bash -lc "
     set -euo pipefail
     cd '$APP_DIR'
-    export NODE_ENV=production
+    # Do not set NODE_ENV=production here — npm would skip devDependencies
+    # (@tailwindcss/postcss, tailwindcss) that Next.js needs to compile CSS.
     npm ci
     npm run build
+    npm prune --omit=dev
   "
 
   if [[ "$RUN_MIGRATE" == "true" ]]; then
