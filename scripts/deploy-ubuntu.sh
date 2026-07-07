@@ -17,7 +17,7 @@
 #   DOMAIN          Public hostname (required for --install nginx + SSL)
 #   APP_DIR         Install path (default: /opt/wacrm)
 #   APP_USER        Linux user that runs the app (default: wacrm)
-#   APP_PORT        Next.js port behind nginx (default: 3000)
+#   APP_PORT        Next.js port behind nginx (default: 3023)
 #   NODE_MAJOR      Node.js major version (default: 20)
 #   RUN_MIGRATE     If "true", runs npm run db:migrate when DATABASE_URL is set
 #   ENABLE_SSL      If "true", runs certbot after nginx (needs DOMAIN + email)
@@ -27,7 +27,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/wacrm}"
 APP_USER="${APP_USER:-wacrm}"
-APP_PORT="${APP_PORT:-3000}"
+APP_PORT="${APP_PORT:-3023}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 RUN_MIGRATE="${RUN_MIGRATE:-false}"
 ENABLE_SSL="${ENABLE_SSL:-false}"
