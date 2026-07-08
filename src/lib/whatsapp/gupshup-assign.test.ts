@@ -136,6 +136,53 @@ describe('assignGupshupAccount', () => {
     expect(result.updated).toBe(true)
   })
 
+  it('defaults gs_app_id to gupshup_app_id when omitted', async () => {
+    const updates: Record<string, unknown>[] = []
+    const db = {
+      from: (table: string) => {
+        if (table === 'accounts') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: { id: 'acct-1', owner_user_id: 'user-1' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                neq: () => ({
+                  maybeSingle: async () => ({ data: null, error: null }),
+                }),
+                maybeSingle: async () => ({ data: null, error: null }),
+              }),
+            }),
+            insert: async (row: Record<string, unknown>) => {
+              updates.push(row)
+              return { error: null }
+            },
+          }
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+    }
+
+    await assignGupshupAccount(db as never, {
+      accountId: 'acct-1',
+      gupshupAppId: 'bf9ee64c-3d4d-4ac4-8668-732e577007c4',
+      apiKey: 'sk_test',
+      phoneNumberId: 'phone-id',
+      displayPhoneNumber: '+911234567890',
+    })
+
+    expect(updates[0]?.gs_app_id).toBe('bf9ee64c-3d4d-4ac4-8668-732e577007c4')
+  })
+
   it('rejects when phone_number_id is claimed by another account', async () => {
     const db = mockDb({
       account: { id: 'acct-1', owner_user_id: 'user-1' },

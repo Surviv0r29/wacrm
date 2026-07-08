@@ -210,13 +210,21 @@ export async function POST(request: Request) {
   // (see issue #301). `after()` hands the callback to the runtime, which
   // keeps the function alive until it resolves (within the route's
   // maxDuration).
-  after(async () => {
+  const runProcessWebhook = async () => {
     try {
       await processWebhook(body)
     } catch (error) {
       console.error('Error processing webhook:', error)
     }
-  })
+  }
+
+  // On Vercel, defer work with after() so we ack within Meta's timeout.
+  // On self-hosted PM2, process inline — after() can drop work before it runs.
+  if (process.env.VERCEL) {
+    after(runProcessWebhook)
+  } else {
+    await runProcessWebhook()
+  }
 
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
@@ -226,25 +234,8 @@ async function findWhatsappConfigForInbound(
   gsAppId?: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any | null> {
-  if (phoneNumberId) {
-    const { data: byPhone, error } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('*')
-      .eq('phone_number_id', phoneNumberId)
-
-    if (error) {
-      console.error('Error fetching whatsapp_config for phone_number_id:', phoneNumberId, error)
-      return null
-    }
-    if (byPhone?.length === 1) return byPhone[0]
-    if (byPhone && byPhone.length > 1) {
-      console.error(
-        `Multiple configs (${byPhone.length}) for phone_number_id ${phoneNumberId} — inbound dropped`,
-      )
-      return null
-    }
-  }
-
+  // Gupshup V3 always sends gs_app_id — prefer it over phone_number_id so we
+  // don't accidentally match the wrong row when Meta ids overlap.
   if (gsAppId) {
     const { data: byGs, error } = await supabaseAdmin()
       .from('whatsapp_config')
@@ -259,6 +250,25 @@ async function findWhatsappConfigForInbound(
     if (byGs && byGs.length > 1) {
       console.error(
         `Multiple configs (${byGs.length}) for gs_app_id ${gsAppId} — inbound dropped`,
+      )
+      return null
+    }
+  }
+
+  if (phoneNumberId) {
+    const { data: byPhone, error } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('*')
+      .eq('phone_number_id', phoneNumberId)
+
+    if (error) {
+      console.error('Error fetching whatsapp_config for phone_number_id:', phoneNumberId, error)
+      return null
+    }
+    if (byPhone?.length === 1) return byPhone[0]
+    if (byPhone && byPhone.length > 1) {
+      console.error(
+        `Multiple configs (${byPhone.length}) for phone_number_id ${phoneNumberId} — inbound dropped`,
       )
       return null
     }
@@ -305,7 +315,7 @@ async function processWebhook(body: WebhookPayload) {
       // Handle incoming messages
       if (!value.messages || !value.contacts) continue
 
-      const phoneNumberId = value.metadata.phone_number_id
+      const phoneNumberId = value.metadata?.phone_number_id ?? ''
 
       const config = await findWhatsappConfigForInbound(phoneNumberId, gsAppId)
       if (!config) {
@@ -316,7 +326,17 @@ async function processWebhook(body: WebhookPayload) {
         continue
       }
 
-      const decryptedAccessToken = decrypt(config.access_token)
+      let decryptedAccessToken: string
+      try {
+        decryptedAccessToken = decrypt(config.access_token)
+      } catch (err) {
+        console.error(
+          '[webhook] cannot decrypt access_token for account',
+          config.account_id,
+          err instanceof Error ? err.message : err,
+        )
+        continue
+      }
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]

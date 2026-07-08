@@ -93,10 +93,12 @@ export async function assignGupshupAccount(
     throw new AssignGupshupError('api_key is required', 400)
   }
 
+  const effectiveGsAppId = (gsAppId?.trim() || gupshupAppId.trim()) || null
+
   const row = {
     provider: 'gupshup' as const,
     gupshup_app_id: gupshupAppId,
-    gs_app_id: gsAppId,
+    gs_app_id: effectiveGsAppId,
     phone_number_id: phoneNumberId,
     display_phone_number: displayPhoneNumber,
     access_token: accessToken,

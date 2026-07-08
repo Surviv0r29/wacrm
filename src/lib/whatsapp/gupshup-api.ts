@@ -72,9 +72,12 @@ async function parseGupshupSendResponse(
   }
 
   if (!response.ok || data.status === 'error') {
-    throw new Error(
-      extractGupshupErrorMessage(data, `Gupshup API error: ${response.status}`),
+    const message = extractGupshupErrorMessage(
+      data,
+      `Gupshup API error: ${response.status}`,
     )
+    console.error('[gupshup-api] send failed', JSON.stringify({ status: response.status, message }))
+    throw new Error(message)
   }
 
   const messageId = data.messages?.[0]?.id
