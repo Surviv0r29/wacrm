@@ -234,8 +234,25 @@ async function findWhatsappConfigForInbound(
   gsAppId?: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any | null> {
-  // Gupshup V3 always sends gs_app_id — prefer it over phone_number_id so we
-  // don't accidentally match the wrong row when Meta ids overlap.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const takeOne = (
+    rows: any[] | null | undefined,
+    label: string,
+    value: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): any | null | undefined => {
+    if (!rows) return undefined
+    if (rows.length === 1) return rows[0]
+    if (rows.length > 1) {
+      console.error(
+        `Multiple configs (${rows.length}) for ${label} ${value} — inbound dropped`,
+      )
+      return null
+    }
+    return undefined
+  }
+
+  // 1) Prefer webhook gs_app_id → column gs_app_id
   if (gsAppId) {
     const { data: byGs, error } = await supabaseAdmin()
       .from('whatsapp_config')
@@ -246,15 +263,60 @@ async function findWhatsappConfigForInbound(
       console.error('Error fetching whatsapp_config for gs_app_id:', gsAppId, error)
       return null
     }
-    if (byGs?.length === 1) return byGs[0]
-    if (byGs && byGs.length > 1) {
+    console.log(
+      '[webhook] lookup gs_app_id',
+      JSON.stringify({ gsAppId, matches: byGs?.length ?? 0 }),
+    )
+    const hit = takeOne(byGs, 'gs_app_id', gsAppId)
+    if (hit === null) return null
+    if (hit) return hit
+
+    // 2) Older assigns often stored the UUID only in gupshup_app_id
+    //    and left gs_app_id null — match that and self-heal.
+    const { data: byApp, error: byAppErr } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('*')
+      .eq('gupshup_app_id', gsAppId)
+
+    if (byAppErr) {
       console.error(
-        `Multiple configs (${byGs.length}) for gs_app_id ${gsAppId} — inbound dropped`,
+        'Error fetching whatsapp_config for gupshup_app_id:',
+        gsAppId,
+        byAppErr,
       )
       return null
     }
+    console.log(
+      '[webhook] lookup gupshup_app_id',
+      JSON.stringify({ gsAppId, matches: byApp?.length ?? 0 }),
+    )
+    const appHit = takeOne(byApp, 'gupshup_app_id', gsAppId)
+    if (appHit === null) return null
+    if (appHit) {
+      if (!appHit.gs_app_id) {
+        void supabaseAdmin()
+          .from('whatsapp_config')
+          .update({ gs_app_id: gsAppId })
+          .eq('id', appHit.id)
+          .then(({ error: upErr }: { error: unknown }) => {
+            if (upErr) {
+              console.warn(
+                '[webhook] failed to backfill gs_app_id:',
+                (upErr as { message?: string })?.message ?? upErr,
+              )
+            } else {
+              console.log(
+                '[webhook] backfilled gs_app_id from gupshup_app_id for config',
+                appHit.id,
+              )
+            }
+          })
+      }
+      return appHit
+    }
   }
 
+  // 3) Meta/passthrough phone_number_id
   if (phoneNumberId) {
     const { data: byPhone, error } = await supabaseAdmin()
       .from('whatsapp_config')
@@ -265,15 +327,24 @@ async function findWhatsappConfigForInbound(
       console.error('Error fetching whatsapp_config for phone_number_id:', phoneNumberId, error)
       return null
     }
-    if (byPhone?.length === 1) return byPhone[0]
-    if (byPhone && byPhone.length > 1) {
-      console.error(
-        `Multiple configs (${byPhone.length}) for phone_number_id ${phoneNumberId} — inbound dropped`,
-      )
-      return null
-    }
+    const phoneHit = takeOne(byPhone, 'phone_number_id', phoneNumberId)
+    if (phoneHit === null) return null
+    if (phoneHit) return phoneHit
   }
 
+  console.error('[webhook] no whatsapp_config match', {
+    gsAppId: gsAppId ?? null,
+    phoneNumberId: phoneNumberId || null,
+    supabaseHost: (() => {
+      try {
+        return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').host
+      } catch {
+        return null
+      }
+    })(),
+    hint:
+      'Set gs_app_id (or gupshup_app_id) to the webhook UUID and phone_number_id to the Meta id in Gupshup Admin. If the row exists in Supabase SQL but not here, the server .env.local points at a different project.',
+  })
   return null
 }
 
