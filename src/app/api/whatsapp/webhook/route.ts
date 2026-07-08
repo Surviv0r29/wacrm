@@ -307,13 +307,21 @@ async function processWebhook(body: WebhookPayload) {
 
       // Handle status updates
       if (value.statuses) {
+        console.log(
+          '[webhook] status update(s)',
+          JSON.stringify({
+            gs_app_id: gsAppId ?? null,
+            count: value.statuses.length,
+            statuses: value.statuses.map((s) => s.status),
+          }),
+        )
         for (const status of value.statuses) {
           await handleStatusUpdate(status)
         }
       }
 
       // Handle incoming messages
-      if (!value.messages || !value.contacts) continue
+      if (!value.messages?.length) continue
 
       const phoneNumberId = value.metadata?.phone_number_id ?? ''
 
@@ -340,7 +348,13 @@ async function processWebhook(body: WebhookPayload) {
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
-        const contact = value.contacts[i] || value.contacts[0]
+        // Gupshup sometimes omits contacts[]; fall back to message.from.
+        const contact =
+          value.contacts?.[i] ||
+          value.contacts?.[0] || {
+            profile: { name: message.from },
+            wa_id: message.from,
+          }
 
         console.log(
           '[webhook] inbound message',

@@ -76,7 +76,21 @@ async function parseGupshupSendResponse(
       data,
       `Gupshup API error: ${response.status}`,
     )
-    console.error('[gupshup-api] send failed', JSON.stringify({ status: response.status, message }))
+    console.error(
+      '[gupshup-api] send failed',
+      JSON.stringify({ status: response.status, message, body: data }),
+    )
+    // Gupshup's vague "review the request parameters" almost always means
+    // the Partner App Access Token doesn't match this appId, Callback
+    // Billing isn't enabled, or the app isn't fully live for V3.
+    if (/review the request parameters/i.test(message)) {
+      throw new Error(
+        `${message} — check: (1) app UUID in path matches the app that owns the sk_ token, ` +
+          `(2) token is a Partner App Access Token (starts with sk_), ` +
+          `(3) Callback Billing is enabled for the app in Gupshup Partner, ` +
+          `(4) recipient phone is digits-only with country code.`,
+      )
+    }
     throw new Error(message)
   }
 
@@ -102,16 +116,30 @@ async function postGupshupV3(
   const url = `${GUPSHUP_PARTNER_BASE}/partner/app/${appId}/v3/message`
   const auth = normalizeGupshupApiToken(apiToken)
 
+  console.log(
+    '[gupshup-api] send attempt',
+    JSON.stringify({
+      encoding,
+      appId,
+      to: body.to ?? null,
+      type: body.type ?? null,
+      tokenPrefix: auth.slice(0, 6),
+      tokenLen: auth.length,
+    }),
+  )
+
   const response = await fetch(url, {
     method: 'POST',
     headers:
       encoding === 'json'
         ? {
             Authorization: auth,
+            Accept: 'application/json',
             'Content-Type': 'application/json',
           }
         : {
             Authorization: auth,
+            Accept: 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded',
           },
     body:
