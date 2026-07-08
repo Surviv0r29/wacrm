@@ -84,8 +84,33 @@ function digitsOnly(value: string): string {
   return String(value).replace(/\D/g, '')
 }
 
-function canSelfServe(ctx?: GupshupSelfServeContext | null): boolean {
-  return Boolean(ctx?.sourcePhone?.trim() && ctx?.appName?.trim())
+/** Resolve Self-Serve context from args + platform env overrides. */
+export function resolveGupshupSelfServeContext(
+  ctx?: GupshupSelfServeContext | null,
+): GupshupSelfServeContext | null {
+  const sourcePhone =
+    ctx?.sourcePhone?.trim() ||
+    process.env.GUPSHUP_SOURCE_PHONE?.trim() ||
+    null
+  const appName =
+    ctx?.appName?.trim() ||
+    process.env.GUPSHUP_APP_NAME?.trim() ||
+    null
+  if (!sourcePhone || !appName) return null
+  return { sourcePhone, appName }
+}
+
+function missingSelfServeHint(ctx?: GupshupSelfServeContext | null): string {
+  const missing: string[] = []
+  if (!(ctx?.sourcePhone?.trim() || process.env.GUPSHUP_SOURCE_PHONE?.trim())) {
+    missing.push('display phone / GUPSHUP_SOURCE_PHONE')
+  }
+  if (!(ctx?.appName?.trim() || process.env.GUPSHUP_APP_NAME?.trim())) {
+    missing.push('gupshup_app_name / GUPSHUP_APP_NAME')
+  }
+  return missing.length
+    ? `Self-Serve fallback skipped — set ${missing.join(' and ')} in Gupshup Admin or .env.local`
+    : 'Self-Serve fallback skipped'
 }
 
 async function parseGupshupV3Response(
@@ -281,28 +306,43 @@ async function postGupshupSelfServe(
   return { messageId }
 }
 
-async function withV3ThenSelfServe(
+/**
+ * Prefer Self-Serve when configured (Console apikey path that we know works),
+ * otherwise Partner V3. If Self-Serve is configured and fails, still try V3.
+ * If V3 fails and Self-Serve was not configured, surface a clear setup hint.
+ */
+async function withSelfServeOrV3(
   v3: () => Promise<GupshupSendResult>,
   selfServe: (() => Promise<GupshupSendResult>) | null,
+  selfServeCtx?: GupshupSelfServeContext | null,
 ): Promise<GupshupSendResult> {
-  try {
-    return await v3()
-  } catch (v3Err) {
-    const v3Message = v3Err instanceof Error ? v3Err.message : String(v3Err)
-    if (!selfServe || (!isParamReviewError(v3Message) && !/authentication failed/i.test(v3Message))) {
-      throw v3Err
-    }
-    console.warn(
-      `[gupshup-api] V3 failed (${v3Message}); falling back to Self-Serve WA API`,
-    )
+  if (selfServe) {
     try {
       return await selfServe()
     } catch (ssErr) {
       const ssMessage = ssErr instanceof Error ? ssErr.message : String(ssErr)
-      throw new Error(
-        `Partner V3: ${v3Message}. Self-Serve fallback: ${ssMessage}`,
+      console.warn(
+        `[gupshup-api] Self-Serve failed (${ssMessage}); trying Partner V3`,
       )
+      try {
+        return await v3()
+      } catch (v3Err) {
+        const v3Message = v3Err instanceof Error ? v3Err.message : String(v3Err)
+        throw new Error(
+          `Self-Serve: ${ssMessage}. Partner V3: ${v3Message}`,
+        )
+      }
     }
+  }
+
+  try {
+    return await v3()
+  } catch (v3Err) {
+    const v3Message = v3Err instanceof Error ? v3Err.message : String(v3Err)
+    if (isParamReviewError(v3Message) || /authentication failed/i.test(v3Message)) {
+      throw new Error(`${v3Message}. ${missingSelfServeHint(selfServeCtx)}`)
+    }
+    throw v3Err
   }
 }
 
@@ -332,9 +372,10 @@ export async function sendGupshupTextMessage(
     body.context = { message_id: contextMessageId }
   }
 
-  return withV3ThenSelfServe(
+  const resolvedSs = resolveGupshupSelfServeContext(selfServe)
+  return withSelfServeOrV3(
     () => sendGupshupV3Message({ appId, apiToken, body }),
-    canSelfServe(selfServe)
+    resolvedSs
       ? () => {
           const message: Record<string, unknown> = {
             type: 'text',
@@ -345,13 +386,14 @@ export async function sendGupshupTextMessage(
           }
           return postGupshupSelfServe(apiToken, '/wa/api/v1/msg', {
             channel: 'whatsapp',
-            source: digitsOnly(selfServe!.sourcePhone!),
+            source: digitsOnly(resolvedSs.sourcePhone!),
             destination: dest,
-            'src.name': selfServe!.appName!.trim(),
+            'src.name': resolvedSs.appName!.trim(),
             message: JSON.stringify(message),
           })
         }
       : null,
+    selfServe,
   )
 }
 
@@ -400,9 +442,10 @@ export async function sendGupshupMediaMessage(
     body.context = { message_id: contextMessageId }
   }
 
-  return withV3ThenSelfServe(
+  const resolvedSs = resolveGupshupSelfServeContext(selfServe)
+  return withSelfServeOrV3(
     () => sendGupshupV3Message({ appId, apiToken, body }),
-    canSelfServe(selfServe)
+    resolvedSs
       ? () => {
           // Self-Serve uses "file" for documents.
           const ssType = kind === 'document' ? 'file' : kind
@@ -417,13 +460,14 @@ export async function sendGupshupMediaMessage(
           }
           return postGupshupSelfServe(apiToken, '/wa/api/v1/msg', {
             channel: 'whatsapp',
-            source: digitsOnly(selfServe!.sourcePhone!),
+            source: digitsOnly(resolvedSs.sourcePhone!),
             destination: dest,
-            'src.name': selfServe!.appName!.trim(),
+            'src.name': resolvedSs.appName!.trim(),
             message: JSON.stringify(message),
           })
         }
       : null,
+    selfServe,
   )
 }
 
@@ -499,30 +543,34 @@ export async function sendGupshupTemplateMessage(
     body.context = { message_id: contextMessageId }
   }
 
-  return withV3ThenSelfServe(
+  const resolvedSs = resolveGupshupSelfServeContext(selfServe)
+  const canTemplateSelfServe = Boolean(
+    resolvedSs && template?.meta_template_id,
+  )
+  return withSelfServeOrV3(
     () => sendGupshupV3Message({ appId, apiToken, body }),
-    canSelfServe(selfServe) && template?.meta_template_id
+    canTemplateSelfServe
       ? () => {
           const form: Record<string, string> = {
             channel: 'whatsapp',
-            source: digitsOnly(selfServe!.sourcePhone!),
+            source: digitsOnly(resolvedSs!.sourcePhone!),
             destination: dest,
-            'src.name': selfServe!.appName!.trim(),
+            'src.name': resolvedSs!.appName!.trim(),
             template: JSON.stringify({
-              id: template.meta_template_id,
+              id: template!.meta_template_id,
               params: bodyParams.map(String),
             }),
           }
 
           // Media header templates need an extra message object on Self-Serve.
-          const headerType = template.header_type?.toLowerCase()
+          const headerType = template!.header_type?.toLowerCase()
           if (
             headerType === 'image' ||
             headerType === 'video' ||
             headerType === 'document'
           ) {
             const link =
-              messageParams?.headerMediaUrl || template.header_media_url || ''
+              messageParams?.headerMediaUrl || template!.header_media_url || ''
             if (link) {
               form.message = JSON.stringify({
                 type: headerType === 'document' ? 'document' : headerType,
@@ -536,5 +584,6 @@ export async function sendGupshupTemplateMessage(
           return postGupshupSelfServe(apiToken, '/wa/api/v1/template/msg', form)
         }
       : null,
+    selfServe,
   )
 }

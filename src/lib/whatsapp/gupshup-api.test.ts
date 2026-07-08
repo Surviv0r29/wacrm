@@ -49,46 +49,12 @@ describe('sendGupshupTextMessage', () => {
     expect(body.context).toEqual({ message_id: 'wamid.prev' })
   })
 
-  it('falls back to Self-Serve WA API when V3 rejects parameters', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: async () => ({
-          status: 'error',
-          message: 'Please review the request parameters and retry',
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: async () => ({
-          status: 'error',
-          message: 'Please review the request parameters and retry',
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: async () => ({
-          status: 'error',
-          message: 'Please review the request parameters and retry',
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: async () => ({
-          status: 'error',
-          message: 'Please review the request parameters and retry',
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ status: 'submitted', messageId: 'ss-msg-1' }),
-      })
+  it('prefers Self-Serve WA API when source phone + app name are set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'submitted', messageId: 'ss-msg-1' }),
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await sendGupshupTextMessage({
@@ -103,20 +69,44 @@ describe('sendGupshupTextMessage', () => {
     })
 
     expect(result.messageId).toBe('ss-msg-1')
-    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
-    expect(lastCall[0]).toContain('/wa/api/v1/msg')
-    expect(lastCall[1].headers.apikey).toBe('console-apikey')
-    expect(lastCall[1].body).toContain('src.name=MyApp')
-    expect(lastCall[1].body).toContain('source=918375031069')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toContain('/wa/api/v1/msg')
+    expect(opts.headers.apikey).toBe('console-apikey')
+    expect(opts.body).toContain('src.name=MyApp')
+    expect(opts.body).toContain('source=918375031069')
   })
 
-  it('throws on auth failure when no self-serve context', async () => {
+  it('hints when V3 fails and Self-Serve is not configured', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
         ok: false,
-        status: 401,
-        json: async () => ({ message: 'Authentication Failed', status: 'error' }),
+        status: 400,
+        json: async () => ({
+          status: 'error',
+          message: 'Please review the request parameters and retry',
+        }),
+      }),
+    )
+
+    await expect(
+      sendGupshupTextMessage({
+        appId: 'app-123',
+        apiToken: 'sk_bad',
+        to: '919876543210',
+        text: 'Hi',
+      }),
+    ).rejects.toThrow(/Self-Serve fallback skipped/)
+  })
+
+  it('throws on non-param V3 failure when no self-serve context', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ message: 'Internal Server Error', status: 'error' }),
       }),
     )
 
@@ -127,7 +117,7 @@ describe('sendGupshupTextMessage', () => {
         to: '919876543210',
         text: 'Hi',
       }),
-    ).rejects.toThrow(/Authentication Failed/)
+    ).rejects.toThrow(/Internal Server Error/)
   })
 })
 
