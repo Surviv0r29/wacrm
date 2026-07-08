@@ -45,6 +45,7 @@ import {
 
 interface AssignFormState {
   gupshupAppId: string
+  gupshupAppName: string
   apiKey: string
   phoneNumberId: string
   displayPhoneNumber: string
@@ -53,6 +54,7 @@ interface AssignFormState {
 
 const emptyForm = (): AssignFormState => ({
   gupshupAppId: '',
+  gupshupAppName: '',
   apiKey: '',
   phoneNumberId: '',
   displayPhoneNumber: '',
@@ -129,6 +131,7 @@ export function GupshupAssignModule() {
     const wa = account.whatsapp
     setForm({
       gupshupAppId: wa?.gupshup_app_id ?? '',
+      gupshupAppName: wa?.gupshup_app_name ?? '',
       apiKey: '',
       phoneNumberId: wa?.phone_number_id ?? '',
       displayPhoneNumber: wa?.display_phone_number ?? '',
@@ -167,6 +170,9 @@ export function GupshupAssignModule() {
       gupshup_app_id: form.gupshupAppId.trim(),
       phone_number_id: form.phoneNumberId.trim(),
       display_phone_number: form.displayPhoneNumber.trim(),
+    }
+    if (form.gupshupAppName.trim()) {
+      payload.gupshup_app_name = form.gupshupAppName.trim()
     }
     if (form.gsAppId.trim()) payload.gs_app_id = form.gsAppId.trim()
     if (form.apiKey.trim()) payload.api_key = form.apiKey.trim()
@@ -381,6 +387,21 @@ export function GupshupAssignModule() {
                 </p>
               </div>
               <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="gupshup-app-name">Gupshup app name (Self-Serve)</Label>
+                <Input
+                  id="gupshup-app-name"
+                  value={form.gupshupAppName}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, gupshupAppName: e.target.value }))
+                  }
+                  placeholder="Exact app name from Gupshup Console"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Required when your key is a Console apikey (not Partner sk_). Used as
+                  src.name on Self-Serve sends.
+                </p>
+              </div>
+              <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="gs-app-id">gs_app_id (webhook routing)</Label>
                 <Input
                   id="gs-app-id"
@@ -424,7 +445,7 @@ export function GupshupAssignModule() {
                   placeholder={
                     hasExistingKey
                       ? '••••••••••••••••'
-                      : 'App token (sk_…) or account apikey'
+                      : 'Partner sk_… token OR Console apikey'
                   }
                   required={!hasExistingKey}
                 />

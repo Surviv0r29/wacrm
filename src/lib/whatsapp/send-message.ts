@@ -30,6 +30,7 @@ import {
 import {
   sendGupshupTextMessage,
   sendGupshupMediaMessage,
+  sendGupshupTemplateMessage,
   type GupshupMediaKind,
 } from '@/lib/whatsapp/gupshup-api';
 import {
@@ -317,14 +318,6 @@ export async function sendMessageToConversation(
 
   const attempt = async (phone: string): Promise<string> => {
     if (isGupshupProvider(config.provider)) {
-      if (messageType === 'template') {
-        throw new SendMessageError(
-          'unsupported_message_type',
-          'Template sends via Gupshup are not wired yet — use session messages while the 24-hour window is open.',
-          400,
-        );
-      }
-
       let appId: string;
       let apiToken: string;
       try {
@@ -341,6 +334,25 @@ export async function sendMessageToConversation(
         );
       }
 
+      if (messageType === 'template') {
+        const result = await sendGupshupTemplateMessage({
+          appId,
+          apiToken,
+          to: phone,
+          templateName: templateName!,
+          language: templateLanguage || 'en_US',
+          template: templateRow ?? undefined,
+          messageParams: templateMessageParams ?? undefined,
+          params: templateParams || [],
+          contextMessageId: gupshupReplyContext,
+          selfServe: {
+            sourcePhone: config.display_phone_number,
+            appName: config.gupshup_app_name,
+          },
+        });
+        return result.messageId;
+      }
+
       if (messageType === 'text') {
         const result = await sendGupshupTextMessage({
           appId,
@@ -348,6 +360,10 @@ export async function sendMessageToConversation(
           to: phone,
           text: contentText!,
           contextMessageId: gupshupReplyContext,
+          selfServe: {
+            sourcePhone: config.display_phone_number,
+            appName: config.gupshup_app_name,
+          },
         });
         return result.messageId;
       }
@@ -364,6 +380,10 @@ export async function sendMessageToConversation(
           filename:
             messageType === 'document' ? filename || undefined : undefined,
           contextMessageId: gupshupReplyContext,
+          selfServe: {
+            sourcePhone: config.display_phone_number,
+            appName: config.gupshup_app_name,
+          },
         });
         return result.messageId;
       }

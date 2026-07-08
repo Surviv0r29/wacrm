@@ -49,7 +49,7 @@ describe('sendGupshupTextMessage', () => {
     expect(body.context).toEqual({ message_id: 'wamid.prev' })
   })
 
-  it('falls back to form-urlencoded when JSON param review fails', async () => {
+  it('falls back to Self-Serve WA API when V3 rejects parameters', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -61,27 +61,56 @@ describe('sendGupshupTextMessage', () => {
         }),
       })
       .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          status: 'error',
+          message: 'Please review the request parameters and retry',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          status: 'error',
+          message: 'Please review the request parameters and retry',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          status: 'error',
+          message: 'Please review the request parameters and retry',
+        }),
+      })
+      .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ messages: [{ id: 'gs-msg-form' }] }),
+        status: 200,
+        json: async () => ({ status: 'submitted', messageId: 'ss-msg-1' }),
       })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { sendGupshupTextMessage } = await import('./gupshup-api')
     const result = await sendGupshupTextMessage({
       appId: 'app-123',
-      apiToken: 'token-abc',
+      apiToken: 'console-apikey',
       to: '919876543210',
       text: 'Hello',
+      selfServe: {
+        sourcePhone: '+918375031069',
+        appName: 'MyApp',
+      },
     })
 
-    expect(result.messageId).toBe('gs-msg-form')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[1][1].headers['Content-Type']).toBe(
-      'application/x-www-form-urlencoded',
-    )
+    expect(result.messageId).toBe('ss-msg-1')
+    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    expect(lastCall[0]).toContain('/wa/api/v1/msg')
+    expect(lastCall[1].headers.apikey).toBe('console-apikey')
+    expect(lastCall[1].body).toContain('src.name=MyApp')
+    expect(lastCall[1].body).toContain('source=918375031069')
   })
 
-  it('throws on auth failure', async () => {
+  it('throws on auth failure when no self-serve context', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -98,7 +127,42 @@ describe('sendGupshupTextMessage', () => {
         to: '919876543210',
         text: 'Hi',
       }),
-    ).rejects.toThrow('Authentication Failed')
+    ).rejects.toThrow(/Authentication Failed/)
+  })
+})
+
+describe('sendGupshupTemplateMessage', () => {
+  it('posts type=template with name and language', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: [{ id: 'gs-tpl-1' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { sendGupshupTemplateMessage } = await import('./gupshup-api')
+    const result = await sendGupshupTemplateMessage({
+      appId: 'app-123',
+      apiToken: 'token-abc',
+      to: '919876543210',
+      templateName: 'hello_world',
+      language: 'en',
+      params: ['Alice'],
+    })
+
+    expect(result).toEqual({ messageId: 'gs-tpl-1' })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.type).toBe('template')
+    expect(body.template).toEqual({
+      name: 'hello_world',
+      language: { code: 'en' },
+      components: [
+        {
+          type: 'body',
+          parameters: [{ type: 'text', text: 'Alice' }],
+        },
+      ],
+    })
   })
 })
 

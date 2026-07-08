@@ -4,6 +4,8 @@ import { encrypt } from '@/lib/whatsapp/encryption'
 export interface AssignGupshupInput {
   accountId: string
   gupshupAppId: string
+  /** Optional Console app name for Self-Serve WA API (src.name). */
+  gupshupAppName?: string | null
   /** Required for new assignments; omit on update to keep the stored key. */
   apiKey?: string
   phoneNumberId: string
@@ -34,6 +36,7 @@ export async function assignGupshupAccount(
   const {
     accountId,
     gupshupAppId,
+    gupshupAppName = null,
     apiKey,
     phoneNumberId,
     displayPhoneNumber,
@@ -94,10 +97,12 @@ export async function assignGupshupAccount(
   }
 
   const effectiveGsAppId = (gsAppId?.trim() || gupshupAppId.trim()) || null
+  const trimmedAppName = gupshupAppName?.trim() || null
 
   const row = {
     provider: 'gupshup' as const,
     gupshup_app_id: gupshupAppId,
+    gupshup_app_name: trimmedAppName,
     gs_app_id: effectiveGsAppId,
     phone_number_id: phoneNumberId,
     display_phone_number: displayPhoneNumber,

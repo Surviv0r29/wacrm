@@ -21,6 +21,7 @@ export interface AdminAccountRow {
     status: string
     display_phone_number: string | null
     gupshup_app_id: string | null
+    gupshup_app_name: string | null
     gs_app_id: string | null
     phone_number_id: string | null
     has_api_key: boolean
@@ -50,7 +51,7 @@ export async function listAccountsForAdmin(): Promise<AdminAccountRow[]> {
     db
       .from('whatsapp_config')
       .select(
-        'account_id, provider, status, display_phone_number, gupshup_app_id, gs_app_id, phone_number_id, access_token, connected_at',
+        'account_id, provider, status, display_phone_number, gupshup_app_id, gupshup_app_name, gs_app_id, phone_number_id, access_token, connected_at',
       )
       .in(
         'account_id',
@@ -83,6 +84,7 @@ export async function listAccountsForAdmin(): Promise<AdminAccountRow[]> {
             status: cfg.status as string,
             display_phone_number: cfg.display_phone_number as string | null,
             gupshup_app_id: cfg.gupshup_app_id as string | null,
+            gupshup_app_name: (cfg.gupshup_app_name as string | null) ?? null,
             gs_app_id: cfg.gs_app_id as string | null,
             phone_number_id: cfg.phone_number_id as string | null,
             has_api_key: Boolean(cfg.access_token),
@@ -98,7 +100,7 @@ export async function getGupshupAssignment(accountId: string) {
   const { data, error } = await db
     .from('whatsapp_config')
     .select(
-      'account_id, provider, status, display_phone_number, gupshup_app_id, gs_app_id, phone_number_id, access_token, connected_at',
+      'account_id, provider, status, display_phone_number, gupshup_app_id, gupshup_app_name, gs_app_id, phone_number_id, access_token, connected_at',
     )
     .eq('account_id', accountId)
     .maybeSingle()
@@ -115,6 +117,7 @@ export async function getGupshupAssignment(accountId: string) {
     status: data.status,
     display_phone_number: data.display_phone_number,
     gupshup_app_id: data.gupshup_app_id,
+    gupshup_app_name: data.gupshup_app_name,
     gs_app_id: data.gs_app_id,
     phone_number_id: data.phone_number_id,
     has_api_key: Boolean(data.access_token),

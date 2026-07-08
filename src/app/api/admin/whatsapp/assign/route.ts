@@ -55,6 +55,10 @@ export async function POST(request: Request) {
   const accountId = typeof body.account_id === 'string' ? body.account_id.trim() : ''
   const gupshupAppId =
     typeof body.gupshup_app_id === 'string' ? body.gupshup_app_id.trim() : ''
+  const gupshupAppName =
+    typeof body.gupshup_app_name === 'string' && body.gupshup_app_name.trim()
+      ? body.gupshup_app_name.trim()
+      : null
   const apiKey = typeof body.api_key === 'string' ? body.api_key.trim() : undefined
   const phoneNumberId =
     typeof body.phone_number_id === 'string' ? body.phone_number_id.trim() : ''
@@ -76,6 +80,7 @@ export async function POST(request: Request) {
     const result = await assignGupshupAccount(supabaseServiceAdmin(), {
       accountId,
       gupshupAppId,
+      gupshupAppName,
       apiKey,
       phoneNumberId,
       displayPhoneNumber: displayPhone,

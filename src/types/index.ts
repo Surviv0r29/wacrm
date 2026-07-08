@@ -243,6 +243,8 @@ export interface WhatsAppConfig {
   connected_at?: string;
   provider?: WhatsAppProvider;
   gupshup_app_id?: string;
+  /** Gupshup Console app name — required for Self-Serve WA API (src.name). */
+  gupshup_app_name?: string;
   gs_app_id?: string;
   display_phone_number?: string;
   /**
