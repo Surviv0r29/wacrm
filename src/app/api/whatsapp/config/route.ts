@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
 import {
   registerPhoneNumber,
   subscribeWabaToApp,
@@ -8,6 +7,7 @@ import {
 } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
+import { createPrivilegedSupabaseClient } from '@/lib/supabase/privileged-client'
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -32,18 +32,12 @@ async function resolveAccountId(
   return data.account_id as string
 }
 
-// Lazy-initialised service-role client. We need it to detect a
-// phone_number_id already claimed by a *different* user — under RLS,
-// the user's own session can't see other users' rows, so the conflict
-// would be invisible without the service role.
+// Lazy privileged client for phone_number_id conflict checks across users.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _adminClient: any = null
 function supabaseAdmin() {
   if (!_adminClient) {
-    _adminClient = createAdminClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
+    _adminClient = createPrivilegedSupabaseClient()
   }
   return _adminClient
 }

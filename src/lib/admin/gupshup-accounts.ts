@@ -1,10 +1,15 @@
 import { createClient } from '@supabase/supabase-js'
+import { createPrivilegedSupabaseClient } from '@/lib/supabase/privileged-client'
 
 export function supabaseServiceAdmin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  )
+  try {
+    return createPrivilegedSupabaseClient()
+  } catch {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    )
+  }
 }
 
 export interface AdminAccountRow {

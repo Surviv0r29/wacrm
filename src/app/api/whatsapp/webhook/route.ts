@@ -12,6 +12,8 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import { createPrivilegedSupabaseClient } from '@/lib/supabase/privileged-client'
+import { hasDatabaseUrl, pgQuery } from '@/lib/db/postgres'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -24,10 +26,14 @@ export const maxDuration = 60
 let _adminClient: any = null
 function supabaseAdmin() {
   if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
+    try {
+      _adminClient = createPrivilegedSupabaseClient()
+    } catch {
+      _adminClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      )
+    }
   }
   return _adminClient
 }
@@ -229,6 +235,67 @@ export async function POST(request: Request) {
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
+async function findWhatsappConfigViaDatabaseUrl(
+  phoneNumberId: string,
+  gsAppId?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any | null> {
+  if (!hasDatabaseUrl()) return null
+
+  try {
+    if (gsAppId) {
+      const byGs = await pgQuery(
+        `SELECT * FROM whatsapp_config
+         WHERE gs_app_id = $1 OR gupshup_app_id = $1
+         LIMIT 2`,
+        [gsAppId],
+      )
+      if (byGs.length === 1) {
+        console.log(
+          '[webhook] DATABASE_URL lookup matched app id',
+          JSON.stringify({ gsAppId, account_id: byGs[0].account_id }),
+        )
+        return byGs[0]
+      }
+      if (byGs.length > 1) {
+        console.error(
+          `Multiple configs (${byGs.length}) via DATABASE_URL for app id ${gsAppId} — inbound dropped`,
+        )
+        return null
+      }
+    }
+
+    if (phoneNumberId) {
+      const byPhone = await pgQuery(
+        `SELECT * FROM whatsapp_config WHERE phone_number_id = $1 LIMIT 2`,
+        [phoneNumberId],
+      )
+      if (byPhone.length === 1) {
+        console.log(
+          '[webhook] DATABASE_URL lookup matched phone_number_id',
+          JSON.stringify({
+            phoneNumberId,
+            account_id: byPhone[0].account_id,
+          }),
+        )
+        return byPhone[0]
+      }
+      if (byPhone.length > 1) {
+        console.error(
+          `Multiple configs (${byPhone.length}) via DATABASE_URL for phone_number_id ${phoneNumberId} — inbound dropped`,
+        )
+        return null
+      }
+    }
+  } catch (err) {
+    console.error(
+      '[webhook] DATABASE_URL lookup failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+  return null
+}
+
 async function findWhatsappConfigForInbound(
   phoneNumberId: string,
   gsAppId?: string,
@@ -252,84 +319,113 @@ async function findWhatsappConfigForInbound(
     return undefined
   }
 
+  let restFailed = false
+
   // 1) Prefer webhook gs_app_id → column gs_app_id
   if (gsAppId) {
-    const { data: byGs, error } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('*')
-      .eq('gs_app_id', gsAppId)
+    try {
+      const { data: byGs, error } = await supabaseAdmin()
+        .from('whatsapp_config')
+        .select('*')
+        .eq('gs_app_id', gsAppId)
 
-    if (error) {
-      console.error('Error fetching whatsapp_config for gs_app_id:', gsAppId, error)
-      return null
+      if (error) {
+        restFailed = true
+        console.error('Error fetching whatsapp_config for gs_app_id:', gsAppId, error)
+      } else {
+        console.log(
+          '[webhook] lookup gs_app_id',
+          JSON.stringify({ gsAppId, matches: byGs?.length ?? 0 }),
+        )
+        const hit = takeOne(byGs, 'gs_app_id', gsAppId)
+        if (hit === null) return null
+        if (hit) return hit
+      }
+    } catch (err) {
+      restFailed = true
+      console.error('[webhook] Rest lookup gs_app_id threw:', err)
     }
-    console.log(
-      '[webhook] lookup gs_app_id',
-      JSON.stringify({ gsAppId, matches: byGs?.length ?? 0 }),
-    )
-    const hit = takeOne(byGs, 'gs_app_id', gsAppId)
-    if (hit === null) return null
-    if (hit) return hit
 
     // 2) Older assigns often stored the UUID only in gupshup_app_id
-    //    and left gs_app_id null — match that and self-heal.
-    const { data: byApp, error: byAppErr } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('*')
-      .eq('gupshup_app_id', gsAppId)
+    try {
+      const { data: byApp, error: byAppErr } = await supabaseAdmin()
+        .from('whatsapp_config')
+        .select('*')
+        .eq('gupshup_app_id', gsAppId)
 
-    if (byAppErr) {
-      console.error(
-        'Error fetching whatsapp_config for gupshup_app_id:',
-        gsAppId,
-        byAppErr,
-      )
-      return null
-    }
-    console.log(
-      '[webhook] lookup gupshup_app_id',
-      JSON.stringify({ gsAppId, matches: byApp?.length ?? 0 }),
-    )
-    const appHit = takeOne(byApp, 'gupshup_app_id', gsAppId)
-    if (appHit === null) return null
-    if (appHit) {
-      if (!appHit.gs_app_id) {
-        void supabaseAdmin()
-          .from('whatsapp_config')
-          .update({ gs_app_id: gsAppId })
-          .eq('id', appHit.id)
-          .then(({ error: upErr }: { error: unknown }) => {
-            if (upErr) {
-              console.warn(
-                '[webhook] failed to backfill gs_app_id:',
-                (upErr as { message?: string })?.message ?? upErr,
-              )
-            } else {
-              console.log(
-                '[webhook] backfilled gs_app_id from gupshup_app_id for config',
-                appHit.id,
-              )
-            }
-          })
+      if (byAppErr) {
+        restFailed = true
+        console.error(
+          'Error fetching whatsapp_config for gupshup_app_id:',
+          gsAppId,
+          byAppErr,
+        )
+      } else {
+        console.log(
+          '[webhook] lookup gupshup_app_id',
+          JSON.stringify({ gsAppId, matches: byApp?.length ?? 0 }),
+        )
+        const appHit = takeOne(byApp, 'gupshup_app_id', gsAppId)
+        if (appHit === null) return null
+        if (appHit) {
+          if (!appHit.gs_app_id) {
+            void supabaseAdmin()
+              .from('whatsapp_config')
+              .update({ gs_app_id: gsAppId })
+              .eq('id', appHit.id)
+              .then(({ error: upErr }: { error: unknown }) => {
+                if (upErr) {
+                  console.warn(
+                    '[webhook] failed to backfill gs_app_id:',
+                    (upErr as { message?: string })?.message ?? upErr,
+                  )
+                } else {
+                  console.log(
+                    '[webhook] backfilled gs_app_id from gupshup_app_id for config',
+                    appHit.id,
+                  )
+                }
+              })
+          }
+          return appHit
+        }
       }
-      return appHit
+    } catch (err) {
+      restFailed = true
+      console.error('[webhook] Rest lookup gupshup_app_id threw:', err)
     }
   }
 
   // 3) Meta/passthrough phone_number_id
   if (phoneNumberId) {
-    const { data: byPhone, error } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('*')
-      .eq('phone_number_id', phoneNumberId)
+    try {
+      const { data: byPhone, error } = await supabaseAdmin()
+        .from('whatsapp_config')
+        .select('*')
+        .eq('phone_number_id', phoneNumberId)
 
-    if (error) {
-      console.error('Error fetching whatsapp_config for phone_number_id:', phoneNumberId, error)
-      return null
+      if (error) {
+        restFailed = true
+        console.error(
+          'Error fetching whatsapp_config for phone_number_id:',
+          phoneNumberId,
+          error,
+        )
+      } else {
+        const phoneHit = takeOne(byPhone, 'phone_number_id', phoneNumberId)
+        if (phoneHit === null) return null
+        if (phoneHit) return phoneHit
+      }
+    } catch (err) {
+      restFailed = true
+      console.error('[webhook] Rest lookup phone_number_id threw:', err)
     }
-    const phoneHit = takeOne(byPhone, 'phone_number_id', phoneNumberId)
-    if (phoneHit === null) return null
-    if (phoneHit) return phoneHit
+  }
+
+  // 4) Fallback: direct Postgres when Rest key is broken / RLS empty
+  if (restFailed || hasDatabaseUrl()) {
+    const viaDb = await findWhatsappConfigViaDatabaseUrl(phoneNumberId, gsAppId)
+    if (viaDb) return viaDb
   }
 
   console.error('[webhook] no whatsapp_config match', {
@@ -342,8 +438,9 @@ async function findWhatsappConfigForInbound(
         return null
       }
     })(),
+    hasDatabaseUrl: hasDatabaseUrl(),
     hint:
-      'Set gs_app_id (or gupshup_app_id) to the webhook UUID and phone_number_id to the Meta id in Gupshup Admin. If the row exists in Supabase SQL but not here, the server .env.local points at a different project.',
+      'Fix SUPABASE_SERVICE_ROLE_KEY (or set SUPABASE_JWT_SECRET to mint one). DATABASE_URL enables a Postgres fallback for this lookup.',
   })
   return null
 }
