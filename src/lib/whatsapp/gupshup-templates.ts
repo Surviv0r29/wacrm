@@ -285,7 +285,9 @@ export function parseGupshupTemplate(t: GupshupTemplate): ParsedGupshupTemplateR
     buttons: buttons.length ? buttons : null,
     sample_values: sampleValues,
     status,
-    meta_template_id: t.externalId?.trim() || t.id,
+    // Self-Serve `/wa/api/v1/template/msg` expects Gupshup's template UUID (`id`),
+    // not Meta's numeric `externalId`.
+    meta_template_id: t.id,
     quality_score: normalizeQualityScore(t.quality),
     rejection_reason: rejectionReason,
   }

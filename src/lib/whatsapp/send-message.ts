@@ -299,13 +299,25 @@ export async function sendMessageToConversation(
   // guards against a malformed local row crashing the send-builder.
   let templateRow: MessageTemplate | null = null;
   if (messageType === 'template' && templateName) {
-    const { data } = await db
+    const lang = templateLanguage || 'en_US';
+    let { data } = await db
       .from('message_templates')
       .select('*')
       .eq('account_id', accountId)
       .eq('name', templateName)
-      .eq('language', templateLanguage || 'en_US')
+      .eq('language', lang)
       .maybeSingle();
+    // Gupshup sync stores short codes (`en`); callers may pass `en_US`.
+    if (!data) {
+      const { data: byName } = await db
+        .from('message_templates')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('name', templateName)
+        .limit(1)
+        .maybeSingle();
+      data = byName;
+    }
     if (data && !isMessageTemplate(data)) {
       throw new SendMessageError(
         'template_malformed',

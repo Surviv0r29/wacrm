@@ -19,6 +19,10 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Keyword Match',
     pillClass: 'border-purple-500/30 bg-purple-500/10 text-purple-300',
   },
+  intent_match: {
+    label: 'AI Intent',
+    pillClass: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
+  },
   new_contact_created: {
     label: 'New Contact',
     pillClass: 'border-primary/30 bg-primary/10 text-primary',

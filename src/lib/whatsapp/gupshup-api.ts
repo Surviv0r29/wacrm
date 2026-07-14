@@ -84,6 +84,16 @@ function digitsOnly(value: string): string {
   return String(value).replace(/\D/g, '')
 }
 
+/** Gupshup V3 examples use short codes (`en`); DB may store `en_US`. */
+function normalizeGupshupTemplateLanguage(language: string): string {
+  const code = language.trim().replace('-', '_')
+  if (!code) return 'en'
+  const [base, region] = code.split('_')
+  if (!region) return base.toLowerCase()
+  if (base.toLowerCase() === 'en') return 'en'
+  return `${base.toLowerCase()}_${region.toUpperCase()}`
+}
+
 /** Resolve Self-Serve context from args + platform env overrides. */
 export function resolveGupshupSelfServeContext(
   ctx?: GupshupSelfServeContext | null,
@@ -507,7 +517,7 @@ export async function sendGupshupTemplateMessage(
   const dest = digitsOnly(to)
   const templatePayload: Record<string, unknown> = {
     name: templateName,
-    language: { code: language },
+    language: { code: normalizeGupshupTemplateLanguage(language) },
   }
 
   const bodyParams = messageParams?.body ?? params ?? []
@@ -582,6 +592,55 @@ export async function sendGupshupTemplateMessage(
           }
 
           return postGupshupSelfServe(apiToken, '/wa/api/v1/template/msg', form)
+        }
+      : null,
+    selfServe,
+  )
+}
+
+export interface SendGupshupReactionMessageArgs {
+  appId: string
+  apiToken: string
+  to: string
+  /** WhatsApp / Gupshup message id of the message being reacted to. */
+  targetMessageId: string
+  /** Single emoji, or empty string to remove the reaction. */
+  emoji: string
+  selfServe?: GupshupSelfServeContext | null
+}
+
+/** Send a reaction (or removal) via Partner V3 or Self-Serve WA API. */
+export async function sendGupshupReactionMessage(
+  args: SendGupshupReactionMessageArgs,
+): Promise<GupshupSendResult> {
+  const { appId, apiToken, to, targetMessageId, emoji, selfServe } = args
+  const dest = digitsOnly(to)
+
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: dest,
+    type: 'reaction',
+    reaction: { message_id: targetMessageId, emoji },
+  }
+
+  const resolvedSs = resolveGupshupSelfServeContext(selfServe)
+  return withSelfServeOrV3(
+    () => sendGupshupV3Message({ appId, apiToken, body }),
+    resolvedSs
+      ? () => {
+          const form: Record<string, string> = {
+            channel: 'whatsapp',
+            source: digitsOnly(resolvedSs!.sourcePhone!),
+            destination: dest,
+            'src.name': resolvedSs!.appName!.trim(),
+            message: JSON.stringify({
+              type: 'reaction',
+              msgId: targetMessageId,
+              emoji,
+            }),
+          }
+          return postGupshupSelfServe(apiToken, '/wa/api/v1/msg', form)
         }
       : null,
     selfServe,

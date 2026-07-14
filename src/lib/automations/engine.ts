@@ -4,6 +4,7 @@ import type {
   AutomationStep,
   AutomationTriggerType,
   ConditionStepConfig,
+  IntentMatchTriggerConfig,
   KeywordMatchTriggerConfig,
   SendMessageStepConfig,
   SendTemplateStepConfig,
@@ -16,6 +17,7 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import { intentIdsFromConfig } from '@/lib/ai/intent'
 
 // ------------------------------------------------------------
 // Public API
@@ -32,6 +34,10 @@ export interface AutomationContext {
   tag_id?: string
   /** Agent the conversation was assigned to, for conversation_assigned. */
   agent_id?: string
+  /** Classified intent id for intent_match automations. */
+  detected_intent?: string
+  /** Classifier confidence 0–1. */
+  intent_confidence?: number
 }
 
 export interface DispatchInput {
@@ -354,7 +360,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         contactId: args.contactId,
         text,
       })
-      return `sent via Meta (${whatsapp_message_id})`
+      return `sent via WhatsApp (${whatsapp_message_id})`
     }
 
     case 'send_template': {
@@ -362,10 +368,11 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!args.contactId) throw new Error('send_template needs a contact')
       if (!cfg.template_name) throw new Error('send_template needs template_name')
       const conversationId = await resolveConversationId(args)
-      // Meta templates use positional {{1}}, {{2}}, … placeholders, so
-      // we MUST emit params in strict numeric order. Lexicographic sort
+      // Meta / Gupshup templates use positional {{1}}, {{2}}, … placeholders,
+      // so we MUST emit params in strict numeric order. Lexicographic sort
       // of "1", "2", …, "10" yields "1", "10", "2", … which silently
       // scrambles every template with ≥10 variables.
+      // Values support {{ vars.* }} / {{ message.text }} interpolation.
       const params = cfg.variables
         ? Object.keys(cfg.variables)
             .sort((a, b) => {
@@ -378,7 +385,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
               if (bNum) return 1
               return a.localeCompare(b)
             })
-            .map((k) => String(cfg.variables![k]))
+            .map((k) => interpolate(String(cfg.variables![k] ?? ''), args))
         : []
       const { whatsapp_message_id } = await engineSendTemplate({
         accountId: args.automation.account_id,
@@ -389,7 +396,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         language: cfg.language,
         params,
       })
-      return `template sent via Meta (${whatsapp_message_id})`
+      return `template sent via WhatsApp (${whatsapp_message_id})`
     }
 
     case 'add_tag': {
@@ -579,16 +586,34 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
-  if (automation.trigger_type !== 'keyword_match') return true
-  const cfg = automation.trigger_config as KeywordMatchTriggerConfig
-  if (!cfg?.keywords || cfg.keywords.length === 0) return false
-  const text = (ctx?.message_text ?? '').toString()
-  if (!text) return false
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase()
-  return cfg.keywords.some((raw) => {
-    const k = cfg.case_sensitive ? raw : raw.toLowerCase()
-    return cfg.match_type === 'exact' ? haystack === k : haystack.includes(k)
-  })
+  if (automation.trigger_type === 'keyword_match') {
+    const cfg = automation.trigger_config as KeywordMatchTriggerConfig
+    if (!cfg?.keywords || cfg.keywords.length === 0) return false
+    const text = (ctx?.message_text ?? '').toString()
+    if (!text) return false
+    const haystack = cfg.case_sensitive ? text : text.toLowerCase()
+    return cfg.keywords.some((raw) => {
+      const k = cfg.case_sensitive ? raw : raw.toLowerCase()
+      return cfg.match_type === 'exact' ? haystack === k : haystack.includes(k)
+    })
+  }
+
+  if (automation.trigger_type === 'intent_match') {
+    const cfg = automation.trigger_config as IntentMatchTriggerConfig
+    const detected = ctx?.detected_intent?.trim().toLowerCase()
+    if (!detected) return false
+    const allowed = intentIdsFromConfig(cfg)
+    if (!allowed.includes(detected)) return false
+    const min =
+      typeof cfg.min_confidence === 'number' && Number.isFinite(cfg.min_confidence)
+        ? cfg.min_confidence
+        : 0.6
+    const confidence =
+      typeof ctx?.intent_confidence === 'number' ? ctx.intent_confidence : 0
+    return confidence >= min
+  }
+
+  return true
 }
 
 async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {
@@ -622,6 +647,20 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
     case 'message_content': {
       const text = (args.context.message_text ?? '').toString()
       return text.toLowerCase().includes((cfg.value ?? '').toLowerCase())
+    }
+    case 'detected_intent': {
+      // Equals match against the AI-classified intent id (e.g. "pricing").
+      // Prefer value; operand is accepted as an alias so either field works
+      // in the builder.
+      const expected = (cfg.value || cfg.operand || '').trim().toLowerCase()
+      if (!expected) return false
+      const detected = (
+        args.context.detected_intent ||
+        String(args.context.vars?.intent ?? '')
+      )
+        .trim()
+        .toLowerCase()
+      return detected === expected
     }
     case 'time_of_day': {
       // operand form "HH:mm-HH:mm" — true if now is within that window

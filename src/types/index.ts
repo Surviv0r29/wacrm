@@ -405,6 +405,7 @@ export type AutomationTriggerType =
   | 'new_message_received'
   | 'first_inbound_message'
   | 'keyword_match'
+  | 'intent_match'
   | 'new_contact_created'
   | 'conversation_assigned'
   | 'tag_added'
@@ -431,6 +432,31 @@ export interface KeywordMatchTriggerConfig {
   case_sensitive?: boolean;
 }
 
+/**
+ * One labeled customer intent for `intent_match` automations.
+ * The classifier (Gemini Flash Lite) is "trained" at run time from
+ * these labels / descriptions / example phrases — not a separate
+ * fine-tune job.
+ */
+export interface IntentDefinition {
+  /** Stable slug matched after classification, e.g. `pricing`. */
+  id: string;
+  /** Human-readable name shown in the builder. */
+  label: string;
+  /** Optional description that helps the model disambiguate. */
+  description?: string;
+  /** Optional example customer phrases (few-shot). */
+  examples?: string[];
+}
+
+export interface IntentMatchTriggerConfig {
+  intents: IntentDefinition[];
+  /** Minimum confidence 0–1 (default 0.6). */
+  min_confidence?: number;
+  /** Override classifier model (default gemini-3.1-flash-lite). */
+  model?: string;
+}
+
 export interface TagTriggerConfig {
   tag_id: string;
 }
@@ -444,6 +470,7 @@ export interface TimeBasedTriggerConfig {
 export type AutomationTriggerConfig =
   | Record<string, never>
   | KeywordMatchTriggerConfig
+  | IntentMatchTriggerConfig
   | TagTriggerConfig
   | TimeBasedTriggerConfig
   | Record<string, unknown>;
@@ -496,13 +523,14 @@ export type ConditionSubject =
   | 'contact_field'
   | 'tag_presence'
   | 'message_content'
+  | 'detected_intent'
   | 'time_of_day';
 
 export interface ConditionStepConfig {
   subject: ConditionSubject;
   /** e.g. field name, tag id, substring, or "HH:mm-HH:mm" depending on subject */
   operand?: string;
-  /** For contact_field equals / message_content contains — comparison value */
+  /** For contact_field equals / message_content contains / detected_intent equals */
   value?: string;
 }
 

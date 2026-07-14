@@ -15,6 +15,7 @@ import {
   Clock,
   Users,
   PhoneCall,
+  Sparkles,
   Loader2,
 } from "lucide-react"
 
@@ -47,6 +48,7 @@ const TEMPLATE_ORDER: TemplateSlug[] = [
   "welcome_message",
   "out_of_office",
   "lead_qualifier",
+  "ai_intent_router",
   "follow_up_reminder",
 ]
 
@@ -54,6 +56,7 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
   welcome_message: MessageCircle,
   out_of_office: Clock,
   lead_qualifier: Users,
+  ai_intent_router: Sparkles,
   follow_up_reminder: PhoneCall,
 }
 

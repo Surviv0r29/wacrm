@@ -5,6 +5,7 @@ import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { dispatchIntentAutomations } from '@/lib/automations/intent-dispatch'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
@@ -14,6 +15,11 @@ import {
 } from '@/lib/whatsapp/template-webhook'
 import { createPrivilegedSupabaseClient } from '@/lib/supabase/privileged-client'
 import { hasDatabaseUrl, pgQuery } from '@/lib/db/postgres'
+import {
+  isValidMessageStatusTransition,
+  normalizeMessageDeliveryStatus,
+  webhookTimestampToIso,
+} from '@/lib/whatsapp/message-delivery-status'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -89,6 +95,8 @@ interface WhatsAppWebhookEntry {
       messages?: WhatsAppMessage[]
       statuses?: Array<{
         id: string
+        /** Gupshup internal id — matches Self-Serve `messageId` on send. */
+        gs_id?: string
         status: string
         timestamp: string
         recipient_id: string
@@ -597,22 +605,45 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
 
 async function handleStatusUpdate(status: {
   id: string
+  gs_id?: string
   status: string
   timestamp: string
   recipient_id: string
 }) {
-  // 1) Mirror onto messages (legacy behavior) — Meta's status values
-  //    already match the CHECK constraint on messages.status. No
-  //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
-  //    repeat across numbers), so this updates 0..N rows and must not
-  //    assume a single row.
-  const { error: msgErr } = await supabaseAdmin()
-    .from('messages')
-    .update({ status: status.status })
-    .eq('message_id', status.id)
+  const normalizedStatus = normalizeMessageDeliveryStatus(status.status)
+  if (!normalizedStatus) {
+    console.warn(
+      '[webhook] ignoring unknown delivery status',
+      JSON.stringify({ raw: status.status, id: status.id, gs_id: status.gs_id }),
+    )
+    return
+  }
 
-  if (msgErr) {
-    console.error('Error updating message status:', msgErr)
+  const externalIds = [...new Set([status.id, status.gs_id].filter(Boolean) as string[])]
+  const tsIso = webhookTimestampToIso(status.timestamp)
+
+  // 1) Mirror onto messages — match by WhatsApp wamid (`id`) or Gupshup gs_id.
+  for (const externalId of externalIds) {
+    const { data: rows, error: fetchErr } = await supabaseAdmin()
+      .from('messages')
+      .select('id, status')
+      .eq('message_id', externalId)
+
+    if (fetchErr) {
+      console.error('Error fetching messages for status update:', fetchErr)
+      continue
+    }
+
+    for (const row of rows ?? []) {
+      if (!isValidMessageStatusTransition(row.status, normalizedStatus)) continue
+      const { error: msgErr } = await supabaseAdmin()
+        .from('messages')
+        .update({ status: normalizedStatus })
+        .eq('id', row.id)
+      if (msgErr) {
+        console.error('Error updating message status:', msgErr)
+      }
+    }
   }
 
   // Webhook fan-out for this status change happens at the END of this
@@ -623,13 +654,24 @@ async function handleStatusUpdate(status: {
   //    (added in migration 003). The aggregate trigger on
   //    broadcast_recipients re-derives the parent broadcast's
   //    sent/delivered/read/failed counts automatically.
-  const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString()
+  let recipient: { id: string; status: string } | null = null
+  let recFetchErr: { message: string } | null = null
 
-  const { data: recipient, error: recFetchErr } = await supabaseAdmin()
-    .from('broadcast_recipients')
-    .select('id, status')
-    .eq('whatsapp_message_id', status.id)
-    .maybeSingle()
+  for (const externalId of externalIds) {
+    const { data, error } = await supabaseAdmin()
+      .from('broadcast_recipients')
+      .select('id, status')
+      .eq('whatsapp_message_id', externalId)
+      .maybeSingle()
+    if (error) {
+      recFetchErr = error
+      break
+    }
+    if (data) {
+      recipient = data
+      break
+    }
+  }
 
   if (recFetchErr) {
     console.error('Error fetching broadcast recipient:', recFetchErr)
@@ -637,12 +679,12 @@ async function handleStatusUpdate(status: {
     recipient &&
     // Guard transitions — forward-only on the success ladder, and
     // `failed` only from pre-delivered states.
-    isValidStatusTransition(recipient.status, status.status)
+    isValidStatusTransition(recipient.status, normalizedStatus)
   ) {
-    const update: Record<string, unknown> = { status: status.status }
-    if (status.status === 'sent' && !('sent_at' in update)) update.sent_at = tsIso
-    if (status.status === 'delivered') update.delivered_at = tsIso
-    if (status.status === 'read') update.read_at = tsIso
+    const update: Record<string, unknown> = { status: normalizedStatus }
+    if (normalizedStatus === 'sent' && !('sent_at' in update)) update.sent_at = tsIso
+    if (normalizedStatus === 'delivered') update.delivered_at = tsIso
+    if (normalizedStatus === 'read') update.read_at = tsIso
 
     const { error: recUpdateErr } = await supabaseAdmin()
       .from('broadcast_recipients')
@@ -658,12 +700,26 @@ async function handleStatusUpdate(status: {
   //    Runs last so a slow subscriber can't delay the mirrors above.
   //    Bounded to one row (message_id isn't unique) purely to resolve
   //    the owning account for delivery.
-  const { data: msgRow } = await supabaseAdmin()
-    .from('messages')
-    .select('conversation_id, conversations(account_id)')
-    .eq('message_id', status.id)
-    .limit(1)
-    .maybeSingle()
+  let msgRow:
+    | {
+        conversation_id: string
+        conversations: { account_id: string } | null
+      }
+    | null
+    | undefined
+
+  for (const externalId of externalIds) {
+    const { data } = await supabaseAdmin()
+      .from('messages')
+      .select('conversation_id, conversations(account_id)')
+      .eq('message_id', externalId)
+      .limit(1)
+      .maybeSingle()
+    if (data) {
+      msgRow = data
+      break
+    }
+  }
 
   if (msgRow) {
     const conv = msgRow.conversations as { account_id: string } | null
@@ -676,7 +732,7 @@ async function handleStatusUpdate(status: {
         {
           whatsapp_message_id: status.id,
           conversation_id: msgRow.conversation_id,
-          status: status.status,
+          status: normalizedStatus,
         }
       )
     }
@@ -729,19 +785,24 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
  */
 async function lookupInternalIdByMetaId(
   metaId: string,
-  conversationId: string
+  conversationId: string,
+  extraIds: string[] = [],
 ): Promise<string | null> {
-  const { data, error } = await supabaseAdmin()
-    .from('messages')
-    .select('id')
-    .eq('message_id', metaId)
-    .eq('conversation_id', conversationId)
-    .maybeSingle()
-  if (error) {
-    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message)
-    return null
+  const candidates = [...new Set([metaId, ...extraIds].filter(Boolean))]
+  for (const id of candidates) {
+    const { data, error } = await supabaseAdmin()
+      .from('messages')
+      .select('id')
+      .eq('message_id', id)
+      .eq('conversation_id', conversationId)
+      .maybeSingle()
+    if (error) {
+      console.error('[webhook] lookupInternalIdByMetaId failed:', error.message)
+      continue
+    }
+    if (data?.id) return data.id
   }
-  return data?.id ?? null
+  return null
 }
 
 /**
@@ -1029,6 +1090,18 @@ async function processMessage(
         conversation_id: conversation.id,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
+  }
+
+  // AI intent routing — classify once with Gemini Flash Lite, then fire
+  // matching intent_match automations. Same content-level suppression as
+  // keyword_match when a flow already consumed the message.
+  if (!flowConsumed && inboundText.trim()) {
+    dispatchIntentAutomations({
+      accountId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      messageText: inboundText,
+    }).catch((err) => console.error('[automations/intent] dispatch failed:', err))
   }
 
   // AI auto-reply. Runs only for plain-text inbound the deterministic

@@ -218,6 +218,32 @@ describe("validateTriggerForActivation", () => {
     ).toEqual([]);
   });
 
+  it("accepts a valid intent_match config", () => {
+    expect(
+      validateTriggerForActivation("intent_match", {
+        intents: [
+          { id: "pricing", label: "Pricing", examples: ["How much?"] },
+        ],
+        min_confidence: 0.7,
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects intent_match without intents", () => {
+    const issues = validateTriggerForActivation("intent_match", { intents: [] });
+    expect(issues.some((i) => i.path === "trigger.intents")).toBe(true);
+  });
+
+  it("rejects duplicate intent ids", () => {
+    const issues = validateTriggerForActivation("intent_match", {
+      intents: [
+        { id: "pricing", label: "A" },
+        { id: "Pricing", label: "B" },
+      ],
+    });
+    expect(issues.some((i) => i.message.includes("duplicate"))).toBe(true);
+  });
+
   it("requires schedule on time_based triggers", () => {
     expect(validateTriggerForActivation("time_based", {})).toEqual([
       { path: "trigger.schedule", message: "schedule is required" },

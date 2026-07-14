@@ -166,6 +166,54 @@ export function validateTriggerForActivation(
         message: 'match type must be "exact" or "contains"',
       })
     }
+  } else if (triggerType === 'intent_match') {
+    const intents = cfg.intents
+    if (!Array.isArray(intents) || intents.length === 0) {
+      issues.push({
+        path: 'trigger.intents',
+        message: 'at least one intent is required',
+      })
+    } else {
+      const seen = new Set<string>()
+      for (let i = 0; i < intents.length; i++) {
+        const row = intents[i] as Record<string, unknown> | null
+        const id = typeof row?.id === 'string' ? row.id.trim() : ''
+        const label = typeof row?.label === 'string' ? row.label.trim() : ''
+        if (!id) {
+          issues.push({
+            path: `trigger.intents[${i}].id`,
+            message: 'intent id is required',
+          })
+        } else if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(id)) {
+          issues.push({
+            path: `trigger.intents[${i}].id`,
+            message: 'intent id must be letters, numbers, _ or -',
+          })
+        } else if (seen.has(id.toLowerCase())) {
+          issues.push({
+            path: `trigger.intents[${i}].id`,
+            message: `duplicate intent id "${id}"`,
+          })
+        } else {
+          seen.add(id.toLowerCase())
+        }
+        if (!label) {
+          issues.push({
+            path: `trigger.intents[${i}].label`,
+            message: 'intent label is required',
+          })
+        }
+      }
+    }
+    if (cfg.min_confidence != null) {
+      const c = Number(cfg.min_confidence)
+      if (!Number.isFinite(c) || c < 0 || c > 1) {
+        issues.push({
+          path: 'trigger.min_confidence',
+          message: 'min confidence must be between 0 and 1',
+        })
+      }
+    }
   } else if (triggerType === 'time_based') {
     if (!nonEmpty(cfg.schedule)) {
       issues.push({ path: 'trigger.schedule', message: 'schedule is required' })

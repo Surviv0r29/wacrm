@@ -47,12 +47,24 @@ import type {
   AutomationStepType,
   AutomationTriggerType,
   CustomField,
+  IntentDefinition,
+  IntentMatchTriggerConfig,
   KeywordMatchTriggerConfig,
   MessageTemplate,
   Tag as TagRecord,
 } from "@/types"
 import { createClient } from "@/lib/supabase/client"
 import { cn } from "@/lib/utils"
+
+function slugifyIntentId(label: string): string {
+  const slug = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64)
+  return slug || "intent"
+}
 
 // ------------------------------------------------------------
 // Types (builder-local — mirror the flattened rows we POST)
@@ -123,6 +135,11 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
     hint: "First time this contact ever messages you (works for manually-added contacts too)",
   },
   { value: "keyword_match", label: "Keyword Match", hint: "Message contains specific keyword(s)" },
+  {
+    value: "intent_match",
+    label: "AI Intent",
+    hint: "Gemini Flash Lite classifies the message into your labeled intents",
+  },
   { value: "new_contact_created", label: "New Contact Created", hint: "When a contact is auto-created from an incoming message" },
   { value: "conversation_assigned", label: "Conversation Assigned", hint: "When assigned to an agent" },
   { value: "tag_added", label: "Tag Added", hint: "When a tag is added to a contact" },
@@ -508,21 +525,48 @@ function DealPipelineFields({
 
 /** Template dropdown showing approved templates by name + language,
  *  storing both template_name and language. Falls back to manual name +
- *  language inputs when no approved templates are synced yet. */
+ *  language inputs when no approved templates are synced yet. Body
+ *  placeholders ({{1}}, {{2}}, …) get editable variable fields that
+ *  support {{ vars.intent }} / {{ message.text }}. */
 function SendTemplateFields({
   templateName,
   language,
+  variables,
   onChange,
 }: {
   templateName: string
   language: string
-  onChange: (patch: { template_name: string; language: string }) => void
+  variables?: Record<string, string>
+  onChange: (patch: {
+    template_name?: string
+    language?: string
+    variables?: Record<string, string>
+  }) => void
 }) {
   const { templates } = useResources()
+  const selected =
+    templates.find(
+      (t) =>
+        t.name === templateName &&
+        (t.language ?? "en_US") === (language || "en_US"),
+    ) ?? templates.find((t) => t.name === templateName)
+
+  const bodyPlaceholders = (() => {
+    const body = selected?.body_text ?? ""
+    const nums = new Set<number>()
+    for (const m of body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+      nums.add(Number(m[1]))
+    }
+    return [...nums].sort((a, b) => a - b)
+  })()
 
   if (templates.length === 0) {
     return (
       <>
+        <p className="text-[11px] text-muted-foreground">
+          No approved templates yet. Sync them under Settings → Templates
+          (or Sync from Gupshup), then pick one here.
+        </p>
         <FieldBlock label="Template name">
           <Input
             value={templateName}
@@ -554,31 +598,61 @@ function SendTemplateFields({
   )
 
   return (
-    <FieldBlock label="Template">
-      <select
-        value={current}
-        onChange={(e) => {
-          const [name, lang] = e.target.value.split("::")
-          onChange({ template_name: name ?? "", language: lang ?? "" })
-        }}
-        className={SELECT_CLASS}
-      >
-        <option value="">Select a template…</option>
-        {templates.map((t) => {
-          const lang = t.language ?? "en_US"
-          return (
-            <option key={t.id} value={toValue(t.name, lang)}>
-              {t.name} ({lang})
+    <>
+      <FieldBlock label="Template">
+        <select
+          value={current}
+          onChange={(e) => {
+            const [name, lang] = e.target.value.split("::")
+            onChange({
+              template_name: name ?? "",
+              language: lang ?? "",
+              variables: {},
+            })
+          }}
+          className={SELECT_CLASS}
+        >
+          <option value="">Select a template…</option>
+          {templates.map((t) => {
+            const lang = t.language ?? "en_US"
+            return (
+              <option key={t.id} value={toValue(t.name, lang)}>
+                {t.name} ({lang})
+              </option>
+            )
+          })}
+          {current && !hasMatch && (
+            <option value={current}>
+              {templateName} ({language || "unknown"}) — not in approved list
             </option>
-          )
-        })}
-        {current && !hasMatch && (
-          <option value={current}>
-            {templateName} ({language || "unknown"}) — not in approved list
-          </option>
-        )}
-      </select>
-    </FieldBlock>
+          )}
+        </select>
+      </FieldBlock>
+      {bodyPlaceholders.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            Body variables — use {"{{ message.text }}"} or {"{{ vars.intent }}"}
+          </p>
+          {bodyPlaceholders.map((n) => (
+            <FieldBlock key={n} label={`{{${n}}}`}>
+              <Input
+                value={variables?.[String(n)] ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    variables: {
+                      ...(variables ?? {}),
+                      [String(n)]: e.target.value,
+                    },
+                  })
+                }
+                placeholder={`Value for {{${n}}}`}
+                className="bg-muted text-foreground"
+              />
+            </FieldBlock>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -803,6 +877,12 @@ function TriggerCard({
                 onChange={onConfigChange}
               />
             )}
+            {type === "intent_match" && (
+              <IntentMatchConfig
+                config={config as unknown as IntentMatchTriggerConfig}
+                onChange={onConfigChange}
+              />
+            )}
             {type === "tag_added" && (
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -900,6 +980,167 @@ function KeywordMatchConfig({
           <option value="contains">Contains</option>
           <option value="exact">Exact</option>
         </select>
+      </div>
+    </div>
+  )
+}
+
+function blankIntent(): IntentDefinition {
+  return { id: "", label: "", description: "", examples: [] }
+}
+
+function IntentMatchConfig({
+  config,
+  onChange,
+}: {
+  config: IntentMatchTriggerConfig
+  onChange: (c: Record<string, unknown>) => void
+}) {
+  const intents = Array.isArray(config?.intents) ? config.intents : []
+  const minConfidence =
+    typeof config?.min_confidence === "number" ? config.min_confidence : 0.6
+
+  useEffect(() => {
+    if (!Array.isArray(config?.intents) || config.intents.length === 0) {
+      onChange({
+        ...config,
+        intents: [
+          {
+            id: "pricing",
+            label: "Pricing",
+            description: "Customer asks about price, plans, or quotes",
+            examples: ["How much does it cost?", "Send me pricing"],
+          },
+          {
+            id: "support",
+            label: "Support",
+            description: "Customer has a problem or needs help",
+            examples: ["My order is delayed", "I need help"],
+          },
+        ],
+        min_confidence: 0.6,
+        model: "gemini-3.1-flash-lite",
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function updateIntent(index: number, patch: Partial<IntentDefinition>) {
+    const next = intents.map((row, i) => {
+      if (i !== index) return row
+      const merged = { ...row, ...patch }
+      if (patch.label != null && (!row.id || row.id === slugifyIntentId(row.label))) {
+        merged.id = slugifyIntentId(patch.label)
+      }
+      return merged
+    })
+    onChange({ ...config, intents: next })
+  }
+
+  function setExamples(index: number, draft: string) {
+    const examples = draft
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+    updateIntent(index, { examples })
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Gemini Flash Lite classifies each inbound message into one of these
+        intents using your labels and example phrases. Requires a Gemini API
+        key under AI Agents. Use{" "}
+        <code className="rounded bg-muted px-1">{"{{ vars.intent }}"}</code> in
+        send steps.
+      </p>
+      {intents.map((intent, index) => (
+        <div
+          key={index}
+          className="space-y-2 rounded-md border border-border/70 bg-background/40 p-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Intent {index + 1}
+            </span>
+            <button
+              type="button"
+              className="text-[11px] text-muted-foreground hover:text-destructive"
+              onClick={() =>
+                onChange({
+                  ...config,
+                  intents: intents.filter((_, i) => i !== index),
+                })
+              }
+            >
+              Remove
+            </button>
+          </div>
+          <Input
+            placeholder="Label (e.g. Pricing)"
+            value={intent.label ?? ""}
+            onChange={(e) => updateIntent(index, { label: e.target.value })}
+            className="bg-muted text-foreground"
+          />
+          <Input
+            placeholder="Id slug (e.g. pricing)"
+            value={intent.id ?? ""}
+            onChange={(e) =>
+              updateIntent(index, {
+                id: e.target.value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_-]/g, ""),
+              })
+            }
+            className="bg-muted font-mono text-xs text-foreground"
+          />
+          <Input
+            placeholder="Description (optional)"
+            value={intent.description ?? ""}
+            onChange={(e) =>
+              updateIntent(index, { description: e.target.value })
+            }
+            className="bg-muted text-foreground"
+          />
+          <Textarea
+            placeholder={"Example phrases, one per line\nHow much does it cost?"}
+            value={(intent.examples ?? []).join("\n")}
+            onChange={(e) => setExamples(index, e.target.value)}
+            rows={2}
+            className="bg-muted text-xs text-foreground"
+          />
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="w-full"
+        onClick={() =>
+          onChange({ ...config, intents: [...intents, blankIntent()] })
+        }
+      >
+        <Plus className="mr-1 size-3.5" />
+        Add intent
+      </Button>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Min confidence ({minConfidence.toFixed(2)})
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={minConfidence}
+          onChange={(e) =>
+            onChange({
+              ...config,
+              min_confidence: Number(e.target.value),
+            })
+          }
+          className="w-full"
+        />
       </div>
     </div>
   )
@@ -1191,6 +1432,9 @@ function StepEditor({
         <SendTemplateFields
           templateName={(cfg.template_name as string) ?? ""}
           language={(cfg.language as string) ?? ""}
+          variables={
+            (cfg.variables as Record<string, string> | undefined) ?? undefined
+          }
           onChange={(patch) => set(patch)}
         />
       )
@@ -1308,26 +1552,39 @@ function StepEditor({
               <option value="tag_presence">Tag presence</option>
               <option value="contact_field">Contact field</option>
               <option value="message_content">Message content</option>
+              <option value="detected_intent">AI detected intent</option>
               <option value="time_of_day">Time of day</option>
             </select>
           </FieldBlock>
-          <FieldBlock label="Operand">
-            <Input
-              placeholder={
-                cfg.subject === "time_of_day"
-                  ? "HH:mm-HH:mm"
-                  : cfg.subject === "contact_field"
-                  ? "name / email / company"
-                  : cfg.subject === "tag_presence"
-                  ? "tag id"
-                  : ""
-              }
-              value={(cfg.operand as string) ?? ""}
-              onChange={(e) => set({ operand: e.target.value })}
-              className="bg-muted text-foreground"
-            />
-          </FieldBlock>
-          {(cfg.subject === "contact_field" || cfg.subject === "message_content") && (
+          {cfg.subject === "detected_intent" ? (
+            <FieldBlock label="Intent id">
+              <Input
+                placeholder="e.g. pricing"
+                value={(cfg.value as string) ?? ""}
+                onChange={(e) => set({ value: e.target.value, operand: "" })}
+                className="bg-muted text-foreground"
+              />
+            </FieldBlock>
+          ) : (
+            <FieldBlock label="Operand">
+              <Input
+                placeholder={
+                  cfg.subject === "time_of_day"
+                    ? "HH:mm-HH:mm"
+                    : cfg.subject === "contact_field"
+                      ? "name / email / company"
+                      : cfg.subject === "tag_presence"
+                        ? "tag id"
+                        : ""
+                }
+                value={(cfg.operand as string) ?? ""}
+                onChange={(e) => set({ operand: e.target.value })}
+                className="bg-muted text-foreground"
+              />
+            </FieldBlock>
+          )}
+          {(cfg.subject === "contact_field" ||
+            cfg.subject === "message_content") && (
             <FieldBlock label="Value">
               <Input
                 value={(cfg.value as string) ?? ""}

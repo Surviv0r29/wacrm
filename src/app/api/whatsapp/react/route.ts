@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
+import { sendGupshupReactionMessage } from '@/lib/whatsapp/gupshup-api';
+import { resolveGupshupAppCredentials } from '@/lib/whatsapp/gupshup-auth';
+import { isGupshupProvider } from '@/lib/whatsapp/provider-mode';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
@@ -14,9 +17,9 @@ import {
  *
  * Body: { message_id: <internal UUID>, emoji: <single emoji or "" to remove> }
  *
- * Sends the reaction to Meta and mirrors it into `message_reactions`
- * (delete on empty emoji). Customer-side reactions are handled by the
- * webhook — this route only writes `actor_type = 'agent'` rows.
+ * Sends the reaction to WhatsApp (Meta or Gupshup) and mirrors it into
+ * `message_reactions` (delete on empty emoji). Customer-side reactions
+ * are handled by the webhook — this route only writes `actor_type = 'agent'` rows.
  */
 export async function POST(request: Request) {
   try {
@@ -76,8 +79,7 @@ export async function POST(request: Request) {
     }
 
     if (!targetMessage.message_id) {
-      // No Meta ID yet — usually a sending/failed agent message. We can't
-      // tell Meta to react to a message it never received.
+      // No WhatsApp ID yet — usually a sending/failed agent message.
       return NextResponse.json(
         { error: 'Cannot react to a message that has not been sent to WhatsApp' },
         { status: 400 },
@@ -108,10 +110,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // WhatsApp config + access token. Account-scoped post-multi-user.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token')
+      .select(
+        'phone_number_id, access_token, provider, gupshup_app_id, gs_app_id, gupshup_app_name, display_phone_number',
+      )
       .eq('account_id', accountId)
       .single();
 
@@ -124,21 +127,41 @@ export async function POST(request: Request) {
 
     const accessToken = decrypt(config.access_token);
     const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
+    const provider = config.provider ?? 'meta';
 
     try {
-      await sendReactionMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: sanitizedPhone,
-        targetMessageId: targetMessage.message_id,
-        emoji,
-      });
+      if (isGupshupProvider(provider)) {
+        const { appId, apiToken } = await resolveGupshupAppCredentials({
+          gupshup_app_id: config.gupshup_app_id,
+          gs_app_id: config.gs_app_id,
+          access_token: config.access_token,
+        });
+        await sendGupshupReactionMessage({
+          appId,
+          apiToken,
+          to: sanitizedPhone,
+          targetMessageId: targetMessage.message_id,
+          emoji,
+          selfServe: {
+            sourcePhone: config.display_phone_number,
+            appName: config.gupshup_app_name,
+          },
+        });
+      } else {
+        await sendReactionMessage({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: sanitizedPhone,
+          targetMessageId: targetMessage.message_id,
+          emoji,
+        });
+      }
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'Unknown Meta API error';
-      console.error('[whatsapp/react] Meta send failed:', message);
+        err instanceof Error ? err.message : 'Unknown WhatsApp API error';
+      console.error('[whatsapp/react] send failed:', message);
       return NextResponse.json(
-        { error: `Meta API error: ${message}` },
+        { error: `WhatsApp API error: ${message}` },
         { status: 502 },
       );
     }
@@ -155,13 +178,11 @@ export async function POST(request: Request) {
       if (delError) {
         console.error('[whatsapp/react] DB delete failed:', delError.message);
         return NextResponse.json(
-          { error: 'Reaction sent to Meta but DB delete failed' },
+          { error: 'Reaction sent to WhatsApp but DB delete failed' },
           { status: 500 },
         );
       }
     } else {
-      // Upsert. The unique constraint (message_id, actor_type, actor_id)
-      // lets us swap emoji in a single statement.
       const { error: upsertError } = await supabase.from('message_reactions').upsert(
         {
           message_id: targetMessage.id,
@@ -176,7 +197,7 @@ export async function POST(request: Request) {
       if (upsertError) {
         console.error('[whatsapp/react] DB upsert failed:', upsertError.message);
         return NextResponse.json(
-          { error: 'Reaction sent to Meta but DB upsert failed' },
+          { error: 'Reaction sent to WhatsApp but DB upsert failed' },
           { status: 500 },
         );
       }

@@ -9,6 +9,7 @@ export type TemplateSlug =
   | 'welcome_message'
   | 'out_of_office'
   | 'lead_qualifier'
+  | 'ai_intent_router'
   | 'follow_up_reminder'
 
 export interface TemplateStepSeed {
@@ -98,6 +99,73 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
       {
         step_type: 'wait',
         step_config: { amount: 10, unit: 'minutes' },
+      },
+      {
+        step_type: 'assign_conversation',
+        step_config: { mode: 'round_robin' },
+      },
+    ],
+  },
+  ai_intent_router: {
+    slug: 'ai_intent_router',
+    name: 'AI Intent Router',
+    description:
+      'Classify with Gemini Flash Lite, then reply with WhatsApp templates per intent. Pick your approved Pricing / Support templates before activating.',
+    trigger_type: 'intent_match',
+    trigger_config: {
+      model: 'gemini-3.1-flash-lite',
+      min_confidence: 0.6,
+      intents: [
+        {
+          id: 'pricing',
+          label: 'Pricing',
+          description: 'Asks about plans, cost, quotes, or buying',
+          examples: [
+            'How much does it cost?',
+            'Send me a quote',
+            'What are your plans?',
+          ],
+        },
+        {
+          id: 'support',
+          label: 'Support',
+          description:
+            'Has a problem, complaint, or needs help with an existing order',
+          examples: [
+            'My order is delayed',
+            'Something is broken',
+            'I need help with my account',
+          ],
+        },
+      ],
+    },
+    steps: [
+      {
+        step_type: 'condition',
+        step_config: {
+          subject: 'detected_intent',
+          value: 'pricing',
+        },
+      },
+      {
+        step_type: 'send_template',
+        step_config: {
+          template_name: '',
+          language: 'en',
+          variables: { '1': '{{ message.text }}' },
+        },
+        parent_index: 0,
+        branch: 'yes',
+      },
+      {
+        step_type: 'send_template',
+        step_config: {
+          template_name: '',
+          language: 'en',
+          variables: { '1': '{{ message.text }}' },
+        },
+        parent_index: 0,
+        branch: 'no',
       },
       {
         step_type: 'assign_conversation',

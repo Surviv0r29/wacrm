@@ -38,7 +38,7 @@ describe('parseGupshupTemplate', () => {
       header_content: 'Payment reminder',
       body_text: 'This is to remind you that {{1}} is due by {{2}}.',
       footer_text: 'This is footer',
-      meta_template_id: '1508119726419684',
+      meta_template_id: '00b8d1ed-7af6-4734-a7a1-e3062f21d7df',
       quality_score: null,
     })
     expect(row.buttons).toHaveLength(1)

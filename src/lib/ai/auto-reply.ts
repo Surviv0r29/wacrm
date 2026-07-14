@@ -49,18 +49,22 @@ export async function dispatchInboundToAiReply(
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level
-    // automations (`new_message_received` / `keyword_match`) are
-    // dispatched independently for this same inbound and may send their
-    // own reply, so if the account has any active one we stand down to
-    // avoid double-texting the customer. (Relationship triggers like
-    // `first_inbound_message` don't count — they're not per-message
-    // auto-responders.)
+    // automations (`new_message_received` / `keyword_match` /
+    // `intent_match`) are dispatched independently for this same inbound
+    // and may send their own reply, so if the account has any active one
+    // we stand down to avoid double-texting the customer. (Relationship
+    // triggers like `first_inbound_message` don't count — they're not
+    // per-message auto-responders.)
     const { data: autoResponders } = await db
       .from('automations')
       .select('id')
       .eq('account_id', accountId)
       .eq('is_active', true)
-      .in('trigger_type', ['new_message_received', 'keyword_match'])
+      .in('trigger_type', [
+        'new_message_received',
+        'keyword_match',
+        'intent_match',
+      ])
       .limit(1)
     if (autoResponders && autoResponders.length > 0) return
 
