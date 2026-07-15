@@ -402,6 +402,44 @@ async function sendInteractiveViaMeta(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    // Gupshup Self-Serve / Partner Console keys are not Meta Cloud tokens.
+    // Interactive buttons/lists would 401 against Graph — flatten to text.
+    if (isGupshupProvider(config.provider)) {
+      const { appId, apiToken } = await resolveGupshupAppCredentials({
+        gupshup_app_id: config.gupshup_app_id,
+        gs_app_id: config.gs_app_id,
+        access_token: config.access_token,
+      })
+      const lines: string[] = [input.bodyText.trim()]
+      if (input.kind === 'buttons') {
+        for (const [i, b] of input.buttons.entries()) {
+          lines.push(`${i + 1}. ${b.title}`)
+        }
+      } else {
+        for (const section of input.sections) {
+          if (section.title) lines.push(section.title)
+          for (const [i, row] of section.rows.entries()) {
+            lines.push(
+              row.description
+                ? `${i + 1}. ${row.title} — ${row.description}`
+                : `${i + 1}. ${row.title}`,
+            )
+          }
+        }
+      }
+      const r = await sendGupshupTextMessage({
+        appId,
+        apiToken,
+        to: phone,
+        text: lines.filter(Boolean).join('\n'),
+        selfServe: {
+          sourcePhone: config.display_phone_number,
+          appName: config.gupshup_app_name,
+        },
+      })
+      return r.messageId
+    }
+
     if (input.kind === 'buttons') {
       const r = await sendInteractiveButtons({
         phoneNumberId: config.phone_number_id,
@@ -430,7 +468,9 @@ async function sendInteractiveViaMeta(
   // Same phone-variant retry as automations/meta-send.ts. Numbers
   // registered with/without a trunk 0 + Meta's sandbox quirks all
   // need this to reliably land a message.
-  const variants = phoneVariants(sanitized)
+  const variants = isGupshupProvider(config.provider)
+    ? [sanitized]
+    : phoneVariants(sanitized)
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null

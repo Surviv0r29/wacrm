@@ -358,33 +358,44 @@ async function sendButtonsAndSuspend(
   node: FlowNodeRow,
 ): Promise<{ outcome: "advanced"; node_key: string }> {
   const cfg = node.config as unknown as SendButtonsNodeConfig;
-  const { whatsapp_message_id } = await engineSendInteractiveButtons({
-    accountId: run.account_id,
-    userId: run.user_id,
-    conversationId: run.conversation_id!,
-    contactId: run.contact_id!,
-    bodyText: cfg.text,
-    headerText: cfg.header_text,
-    footerText: cfg.footer_text,
-    buttons: cfg.buttons.map((b) => ({ id: b.reply_id, title: b.title })),
-  });
-  await logEvent(db, run.id, "message_sent", node.node_key, {
-    node_type: "send_buttons",
-    whatsapp_message_id,
-  });
-  // Look up our internal message id so we can stash it on the run.
-  // Cheap — indexed on `messages.message_id`.
-  const { data: msg } = await db
-    .from("messages")
-    .select("id")
-    .eq("message_id", whatsapp_message_id)
-    .maybeSingle();
-  await db
-    .from("flow_runs")
-    .update({
-      last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
-    })
-    .eq("id", run.id);
+  try {
+    const { whatsapp_message_id } = await engineSendInteractiveButtons({
+      accountId: run.account_id,
+      userId: run.user_id,
+      conversationId: run.conversation_id!,
+      contactId: run.contact_id!,
+      bodyText: cfg.text,
+      headerText: cfg.header_text,
+      footerText: cfg.footer_text,
+      buttons: cfg.buttons.map((b) => ({ id: b.reply_id, title: b.title })),
+    });
+    await logEvent(db, run.id, "message_sent", node.node_key, {
+      node_type: "send_buttons",
+      whatsapp_message_id,
+    });
+    const { data: msg } = await db
+      .from("messages")
+      .select("id")
+      .eq("message_id", whatsapp_message_id)
+      .maybeSingle();
+    await db
+      .from("flow_runs")
+      .update({
+        last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+      })
+      .eq("id", run.id);
+  } catch (err) {
+    await logEvent(db, run.id, "error", node.node_key, {
+      reason: "send_buttons_failed",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    // Soft-fail on Gupshup/Meta send issues — still suspend on this node
+    // so the customer isn't loop-spammed, and later replies can hand off.
+    console.error(
+      "[flows] send_buttons failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
   return { outcome: "advanced", node_key: node.node_key };
 }
 
@@ -394,39 +405,50 @@ async function sendListAndSuspend(
   node: FlowNodeRow,
 ): Promise<{ outcome: "advanced"; node_key: string }> {
   const cfg = node.config as unknown as SendListNodeConfig;
-  const { whatsapp_message_id } = await engineSendInteractiveList({
-    accountId: run.account_id,
-    userId: run.user_id,
-    conversationId: run.conversation_id!,
-    contactId: run.contact_id!,
-    bodyText: cfg.text,
-    buttonLabel: cfg.button_label,
-    headerText: cfg.header_text,
-    footerText: cfg.footer_text,
-    sections: cfg.sections.map((s) => ({
-      title: s.title,
-      rows: s.rows.map((r) => ({
-        id: r.reply_id,
-        title: r.title,
-        description: r.description,
+  try {
+    const { whatsapp_message_id } = await engineSendInteractiveList({
+      accountId: run.account_id,
+      userId: run.user_id,
+      conversationId: run.conversation_id!,
+      contactId: run.contact_id!,
+      bodyText: cfg.text,
+      buttonLabel: cfg.button_label,
+      headerText: cfg.header_text,
+      footerText: cfg.footer_text,
+      sections: cfg.sections.map((s) => ({
+        title: s.title,
+        rows: s.rows.map((r) => ({
+          id: r.reply_id,
+          title: r.title,
+          description: r.description,
+        })),
       })),
-    })),
-  });
-  await logEvent(db, run.id, "message_sent", node.node_key, {
-    node_type: "send_list",
-    whatsapp_message_id,
-  });
-  const { data: msg } = await db
-    .from("messages")
-    .select("id")
-    .eq("message_id", whatsapp_message_id)
-    .maybeSingle();
-  await db
-    .from("flow_runs")
-    .update({
-      last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
-    })
-    .eq("id", run.id);
+    });
+    await logEvent(db, run.id, "message_sent", node.node_key, {
+      node_type: "send_list",
+      whatsapp_message_id,
+    });
+    const { data: msg } = await db
+      .from("messages")
+      .select("id")
+      .eq("message_id", whatsapp_message_id)
+      .maybeSingle();
+    await db
+      .from("flow_runs")
+      .update({
+        last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+      })
+      .eq("id", run.id);
+  } catch (err) {
+    await logEvent(db, run.id, "error", node.node_key, {
+      reason: "send_list_failed",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    console.error(
+      "[flows] send_list failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
   return { outcome: "advanced", node_key: node.node_key };
 }
 

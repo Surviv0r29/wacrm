@@ -1066,13 +1066,20 @@ async function processMessage(
           },
     isFirstInboundMessage,
   })
-  const flowConsumed = flowResult.consumed
+  // Flows that fully handle the chat (menus, collect input, etc.)
+  // suppress message-level automations. A handoff means the bot stepped
+  // aside for a human — still allow automations / AI intent to run on
+  // that inbound (and later ones), otherwise a stuck/lingering flow
+  // permanently blocks Automations.
+  const flowConsumed =
+    flowResult.consumed && flowResult.outcome !== 'handed_off'
 
   console.log(
     '[automations] post-inbound gates',
     JSON.stringify({
       account_id: accountId,
       flow_consumed: flowConsumed,
+      flow_raw_consumed: flowResult.consumed,
       flow_outcome: flowResult.outcome ?? null,
       is_first_inbound: isFirstInboundMessage,
       contact_created: contactOutcome.wasCreated,
