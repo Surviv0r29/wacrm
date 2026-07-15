@@ -159,9 +159,12 @@ export async function fetchGupshupAppToken(
 /**
  * Resolve the API token to use for a customer app.
  *
- * When GUPSHUP_PARTNER_TOKEN is set we try to fetch a fresh sk_ token for
- * the app. If the partner JWT cannot access that app (403/401), we fall back
- * to the per-account API key saved during Gupshup Admin assign.
+ * Prefer the per-account key saved at assign time (Console apikey or `sk_`).
+ * That avoids a Partner JWT round-trip on every send — DigiGlobal Self-Serve
+ * apps get 401 from `/partner/app/{id}/token` and the warning was noise.
+ *
+ * When no stored key exists, mint via GUPSHUP_PARTNER_TOKEN (Partner-only
+ * installs that never pasted an app key).
  */
 export async function resolveGupshupAppCredentials(config: {
   gupshup_app_id?: string | null
@@ -172,28 +175,28 @@ export async function resolveGupshupAppCredentials(config: {
   const partnerToken = process.env.GUPSHUP_PARTNER_TOKEN?.trim()
   const storedToken = readStoredGupshupApiToken(config.access_token)
 
+  if (storedToken) {
+    return { appId, apiToken: storedToken }
+  }
+
   if (partnerToken) {
     try {
       const apiToken = await fetchGupshupAppToken(appId, partnerToken)
       return { appId, apiToken: normalizeGupshupApiToken(apiToken) }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      if (storedToken && isPartnerTokenFetchFailure(message)) {
-        console.warn(
-          `[gupshup-auth] Partner token could not fetch app token for ${appId} (${message}); using stored app API key.`,
+      if (isPartnerTokenFetchFailure(message)) {
+        throw new Error(
+          `Gupshup Partner token cannot access app ${appId} (${message}). Paste the app API key (Console apikey or sk_) in Gupshup Admin.`,
         )
-        return { appId, apiToken: storedToken }
       }
       throw err
     }
   }
 
-  if (!storedToken) {
-    throw new Error(
-      'Gupshup API key missing — paste the app sk_ token in Gupshup Admin, or fix GUPSHUP_PARTNER_TOKEN.',
-    )
-  }
-  return { appId, apiToken: storedToken }
+  throw new Error(
+    'Gupshup API key missing — paste the app sk_ token / Console apikey in Gupshup Admin, or set GUPSHUP_PARTNER_TOKEN.',
+  )
 }
 
 /** True when the error looks like an auth / permission failure. */

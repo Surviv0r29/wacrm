@@ -62,7 +62,21 @@ describe('resolveGupshupAppCredentials', () => {
     }
   })
 
-  it('uses GUPSHUP_PARTNER_TOKEN when configured', async () => {
+  it('prefers the stored app key over GUPSHUP_PARTNER_TOKEN', async () => {
+    process.env.GUPSHUP_PARTNER_TOKEN = 'partner-jwt'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const creds = await resolveGupshupAppCredentials({
+      gupshup_app_id: APP_UUID,
+      access_token: 'stored-sk-key',
+    })
+
+    expect(creds).toEqual({ appId: APP_UUID, apiToken: 'stored-sk-key' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses GUPSHUP_PARTNER_TOKEN when no stored key exists', async () => {
     process.env.GUPSHUP_PARTNER_TOKEN = 'partner-jwt'
     vi.stubGlobal(
       'fetch',
@@ -77,35 +91,13 @@ describe('resolveGupshupAppCredentials', () => {
 
     const creds = await resolveGupshupAppCredentials({
       gupshup_app_id: APP_UUID,
-      access_token: 'enc:stale',
+      access_token: '',
     })
 
     expect(creds).toEqual({ appId: APP_UUID, apiToken: 'sk_fresh' })
   })
 
-  it('falls back to stored app key when partner token fetch returns 403', async () => {
-    process.env.GUPSHUP_PARTNER_TOKEN = 'partner-jwt'
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 403,
-        json: async () => ({
-          status: 'error',
-          message: 'Do not have permission to access api',
-        }),
-      }),
-    )
-
-    const creds = await resolveGupshupAppCredentials({
-      gupshup_app_id: APP_UUID,
-      access_token: 'stored-sk-key',
-    })
-
-    expect(creds).toEqual({ appId: APP_UUID, apiToken: 'stored-sk-key' })
-  })
-
-  it('falls back to the stored encrypted api key when partner token is unset', async () => {
+  it('uses the stored encrypted api key when partner token is unset', async () => {
     const creds = await resolveGupshupAppCredentials({
       gupshup_app_id: APP_UUID,
       access_token: 'stored-sk-key',
