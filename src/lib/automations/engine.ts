@@ -99,11 +99,48 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
       console.error('[automations] fetch failed:', error)
       return
     }
-    if (!automations || automations.length === 0) return
+    if (!automations || automations.length === 0) {
+      console.log(
+        '[automations] no active rows',
+        JSON.stringify({
+          account_id: input.accountId,
+          trigger_type: input.triggerType,
+        }),
+      )
+      return
+    }
+
+    console.log(
+      '[automations] candidates',
+      JSON.stringify({
+        account_id: input.accountId,
+        trigger_type: input.triggerType,
+        count: automations.length,
+        ids: automations.map((a) => a.id),
+      }),
+    )
 
     for (const automation of automations as Automation[]) {
-      if (!triggerMatches(automation, input.context)) continue
+      if (!triggerMatches(automation, input.context)) {
+        console.log(
+          '[automations] trigger filter skipped',
+          JSON.stringify({
+            automation_id: automation.id,
+            trigger_type: automation.trigger_type,
+            name: automation.name,
+          }),
+        )
+        continue
+      }
       try {
+        console.log(
+          '[automations] executing',
+          JSON.stringify({
+            automation_id: automation.id,
+            name: automation.name,
+            trigger_type: automation.trigger_type,
+          }),
+        )
         await executeAutomation(automation, input)
       } catch (err) {
         console.error('[automations] execute failed:', automation.id, err)

@@ -43,7 +43,13 @@ export async function dispatchIntentAutomations(
       console.error('[automations/intent] fetch failed:', error.message)
       return
     }
-    if (!rows?.length) return
+    if (!rows?.length) {
+      console.log(
+        '[automations/intent] no active intent_match automations',
+        JSON.stringify({ account_id: accountId }),
+      )
+      return
+    }
 
     const automations = rows as Automation[]
     const catalogs = automations.map((a) => {
@@ -51,7 +57,23 @@ export async function dispatchIntentAutomations(
       return Array.isArray(cfg?.intents) ? cfg.intents : []
     })
     const intents = mergeIntentCatalogs(catalogs)
-    if (intents.length === 0) return
+    if (intents.length === 0) {
+      console.warn(
+        '[automations/intent] active automations have empty intent catalogs',
+        JSON.stringify({ account_id: accountId, count: automations.length }),
+      )
+      return
+    }
+
+    console.log(
+      '[automations/intent] classifying',
+      JSON.stringify({
+        account_id: accountId,
+        automation_count: automations.length,
+        intent_ids: intents.map((i) => i.id),
+        text_len: messageText.trim().length,
+      }),
+    )
 
     const ai = await loadAiConfig(db, accountId)
     if (!ai) {

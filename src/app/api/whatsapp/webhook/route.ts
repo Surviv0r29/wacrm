@@ -1068,11 +1068,24 @@ async function processMessage(
   })
   const flowConsumed = flowResult.consumed
 
+  console.log(
+    '[automations] post-inbound gates',
+    JSON.stringify({
+      account_id: accountId,
+      flow_consumed: flowConsumed,
+      flow_outcome: flowResult.outcome ?? null,
+      is_first_inbound: isFirstInboundMessage,
+      contact_created: contactOutcome.wasCreated,
+      text_len: (contentText ?? message.text?.body ?? '').trim().length,
+    }),
+  )
+
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
-  // Fire-and-forget: a slow or failing automation must not block the
-  // webhook's 200 OK response to Meta.
+  // Awaited on self-hosted so fire-and-forget work isn't dropped when
+  // the request ends; still isolated with try/catch so failures don't
+  // fail the webhook ack.
   const inboundText = contentText ?? message.text?.body ?? ''
   const automationTriggers: (
     | 'new_contact_created'
@@ -1093,28 +1106,42 @@ async function processMessage(
   // listens to only one trigger runs only when that trigger matches.
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
+
   for (const triggerType of automationTriggers) {
-    runAutomationsForTrigger({
-      accountId,
-      triggerType,
-      contactId: contactRecord.id,
-      context: {
-        message_text: inboundText,
-        conversation_id: conversation.id,
-      },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
+    try {
+      await runAutomationsForTrigger({
+        accountId,
+        triggerType,
+        contactId: contactRecord.id,
+        context: {
+          message_text: inboundText,
+          conversation_id: conversation.id,
+        },
+      })
+    } catch (err) {
+      console.error('[automations] dispatch failed:', err)
+    }
   }
 
   // AI intent routing — classify once with Gemini Flash Lite, then fire
   // matching intent_match automations. Same content-level suppression as
   // keyword_match when a flow already consumed the message.
   if (!flowConsumed && inboundText.trim()) {
-    dispatchIntentAutomations({
-      accountId,
-      contactId: contactRecord.id,
-      conversationId: conversation.id,
-      messageText: inboundText,
-    }).catch((err) => console.error('[automations/intent] dispatch failed:', err))
+    try {
+      await dispatchIntentAutomations({
+        accountId,
+        contactId: contactRecord.id,
+        conversationId: conversation.id,
+        messageText: inboundText,
+      })
+    } catch (err) {
+      console.error('[automations/intent] dispatch failed:', err)
+    }
+  } else if (flowConsumed) {
+    console.log(
+      '[automations/intent] skipped — flow consumed this inbound',
+      JSON.stringify({ account_id: accountId }),
+    )
   }
 
   // AI auto-reply. Runs only for plain-text inbound the deterministic
