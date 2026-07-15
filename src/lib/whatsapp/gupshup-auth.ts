@@ -37,8 +37,11 @@ export function normalizeGupshupApiToken(token: string): string {
 }
 
 /**
- * Self-Serve `/wa/api/v1/*` needs a Console hex `apikey`, not a Partner `sk_`
- * token. Prefer the encrypted assign-time key when it isn't an sk_ token.
+ * API key for Self-Serve `https://api.gupshup.io/wa/api/v1/*` (`apikey` header).
+ *
+ * Prefer a Console hex key when present. Many Self-Serve apps (e.g. DigiGlobal)
+ * also accept the Partner `sk_` app token as `apikey` — Partner `/v3` and
+ * `/template/msg` may 400 for those same apps.
  */
 export function pickGupshupSelfServeApiKey(args: {
   storedToken?: string | null
@@ -50,10 +53,14 @@ export function pickGupshupSelfServeApiKey(args: {
     null
   const stored = args.storedToken?.trim() || null
   const partner = args.partnerAppToken?.trim() || null
-  // Self-Serve needs the Console hex apikey (never sk_).
+  // Prefer non-sk_ Console keys when available.
   if (envKey && !envKey.startsWith('sk_')) return envKey
   if (stored && !stored.startsWith('sk_')) return stored
   if (partner && !partner.startsWith('sk_')) return partner
+  // sk_ works as Self-Serve apikey for many apps.
+  if (envKey) return envKey
+  if (stored) return stored
+  if (partner) return partner
   return null
 }
 

@@ -397,8 +397,8 @@ export function GupshupAssignModule() {
                   placeholder="Exact app name from Gupshup Console"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Required when your key is a Console apikey (not Partner sk_). Used as
-                  src.name on Self-Serve sends.
+                  Required for Self-Serve sends as <code className="rounded bg-muted px-1">src.name</code>.
+                  Must match the exact app name in Gupshup Console.
                 </p>
               </div>
               <div className="space-y-2 sm:col-span-2">
@@ -450,9 +450,9 @@ export function GupshupAssignModule() {
                   required={!hasExistingKey}
                 />
                 <p className="text-xs text-muted-foreground">
-                  From Gupshup Partner → app → Get Access Token, or set{' '}
-                  <code className="rounded bg-muted px-1">GUPSHUP_PARTNER_TOKEN</code> in
-                  server env to fetch tokens automatically.
+                  Self-Serve: Console apikey or Partner <code className="rounded bg-muted px-1">sk_…</code>{' '}
+                  (both work as <code className="rounded bg-muted px-1">apikey</code>). Or set{' '}
+                  <code className="rounded bg-muted px-1">GUPSHUP_PARTNER_TOKEN</code> to fetch tokens.
                 </p>
               </div>
             </div>

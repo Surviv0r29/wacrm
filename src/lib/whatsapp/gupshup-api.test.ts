@@ -141,11 +141,13 @@ describe('sendGupshupTemplateMessage', () => {
     })
 
     expect(result).toEqual({ messageId: 'gs-tpl-1' })
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
-    expect(body.type).toBe('template')
-    expect(body.template).toEqual({
+    const opts = fetchMock.mock.calls[0][1]
+    // First V3 attempt is form-urlencoded.
+    const form = new URLSearchParams(opts.body)
+    expect(form.get('type')).toBe('template')
+    expect(JSON.parse(form.get('template')!)).toEqual({
       name: 'hello_world',
-      language: { code: 'en' },
+      language: { policy: 'deterministic', code: 'en' },
       components: [
         {
           type: 'body',
@@ -234,12 +236,12 @@ describe('buildGupshupSelfServeTemplateParams', () => {
   })
 })
 
-describe('sendGupshupTemplateMessage Partner /template/msg', () => {
-  it('POSTs Partner /template/msg with sk_ token + Gupshup UUID', async () => {
+describe('sendGupshupTemplateMessage Self-Serve /template/msg', () => {
+  it('POSTs Self-Serve /wa/api/v1/template/msg with sk_ as apikey + Gupshup UUID', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      status: 200,
-      json: async () => ({ status: 'submitted', messageId: 'pt-tpl-1' }),
+      status: 202,
+      json: async () => ({ status: 'submitted', messageId: 'ss-tpl-1' }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -265,12 +267,10 @@ describe('sendGupshupTemplateMessage Partner /template/msg', () => {
       },
     })
 
-    expect(result.messageId).toBe('pt-tpl-1')
+    expect(result.messageId).toBe('ss-tpl-1')
     const [url, opts] = fetchMock.mock.calls[0]
-    expect(url).toContain(
-      '/partner/app/a471d262-1c6b-482b-a8b2-25613ddaecb1/template/msg',
-    )
-    expect(opts.headers.Authorization).toBe('sk_partner_token')
+    expect(url).toContain('/wa/api/v1/template/msg')
+    expect(opts.headers.apikey).toBe('sk_partner_token')
     expect(opts.headers['Content-Type']).toBe(
       'application/x-www-form-urlencoded',
     )

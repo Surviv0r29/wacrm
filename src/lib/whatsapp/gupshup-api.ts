@@ -1,11 +1,12 @@
 /**
- * Gupshup messaging — Partner Passthrough V3 + Self-Serve WA API fallback.
+ * Gupshup messaging — Self-Serve WA API first, then Partner fallbacks.
  *
- * Primary: https://partner.gupshup.io/partner/app/{appId}/v3/message
- * Fallback: https://api.gupshup.io/wa/api/v1/msg (and /template/msg)
+ * Self-Serve: https://api.gupshup.io/wa/api/v1/msg (and /template/msg)
+ * Partner:    https://partner.gupshup.io/partner/app/{appId}/… 
  *
- * Many installs store a Console `apikey` (not Partner `sk_`). V3 rejects
- * that with "Please review the request parameters"; Self-Serve accepts it.
+ * DigiGlobal and many Self-Serve apps accept `sk_` as the Self-Serve `apikey`
+ * header. Partner `/v3/message` and `/template/msg` often return
+ * "Please review the request parameters" for those same apps.
  */
 
 import {
@@ -39,8 +40,8 @@ export interface GupshupSelfServeContext {
   /** App display name shown in Gupshup Console (src.name). */
   appName?: string | null
   /**
-   * Console `apikey` for https://api.gupshup.io/wa/api/... 
-   * Must NOT be a Partner `sk_` token — Self-Serve rejects those.
+   * `apikey` for https://api.gupshup.io/wa/api/...
+   * Console hex key preferred; Partner `sk_` also works for many Self-Serve apps.
    */
   apiKey?: string | null
 }
@@ -313,12 +314,6 @@ async function postGupshupSelfServe(
   const url = `${GUPSHUP_WA_API_BASE}${path}`
   const token = normalizeGupshupApiToken(apiToken)
 
-  if (token.startsWith('sk_')) {
-    throw new Error(
-      'Self-Serve WhatsApp API needs a Console apikey, not a Partner sk_ token',
-    )
-  }
-
   console.log(
     '[gupshup-api] self-serve attempt',
     JSON.stringify({
@@ -381,8 +376,8 @@ async function postGupshupSelfServe(
 }
 
 /**
- * Prefer Self-Serve when configured (Console apikey path that we know works),
- * otherwise Partner V3. If Self-Serve is configured and fails, still try V3.
+ * Prefer Self-Serve when source phone + app name + api key are available,
+ * otherwise Partner V3. If Self-Serve fails, still try V3.
  * If V3 fails and Self-Serve was not configured, surface a clear setup hint.
  */
 async function withSelfServeOrV3(
@@ -429,7 +424,7 @@ export interface SendGupshupTextMessageArgs {
   selfServe?: GupshupSelfServeContext | null
 }
 
-/** Send a session text message (Partner /msg → Self-Serve → V3). */
+/** Send a session text message (Self-Serve → Partner /msg → V3). */
 export async function sendGupshupTextMessage(
   args: SendGupshupTextMessageArgs,
 ): Promise<GupshupSendResult> {
@@ -447,11 +442,11 @@ export async function sendGupshupTextMessage(
   }
 
   const resolvedSs = resolveGupshupSelfServeContext(selfServe)
-  const consoleKey = pickGupshupSelfServeApiKey({
-    storedToken: selfServe?.apiKey,
-    partnerAppToken: null,
-  })
   const partnerToken = normalizeGupshupApiToken(apiToken)
+  const ssKey = pickGupshupSelfServeApiKey({
+    storedToken: selfServe?.apiKey ?? resolvedSs?.apiKey,
+    partnerAppToken: partnerToken,
+  })
   const sourcePhone = resolvedSs?.sourcePhone
     ? digitsOnly(resolvedSs.sourcePhone)
     : ''
@@ -463,7 +458,23 @@ export async function sendGupshupTextMessage(
     ssMessage.context = { msgId: contextMessageId }
   }
 
-  // Partner /msg with sk_ (same auth DigiGlobal already has).
+  // Self-Serve first — DigiGlobal accepts sk_ as apikey; Partner often 400s.
+  if (sourcePhone && appName && ssKey) {
+    try {
+      return await postGupshupSelfServe(ssKey, '/wa/api/v1/msg', {
+        channel: 'whatsapp',
+        source: sourcePhone,
+        destination: dest,
+        'src.name': appName,
+        message: JSON.stringify(ssMessage),
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Self-Serve: ${msg}`)
+      console.warn(`[gupshup-api] Self-Serve /msg failed (${msg}); trying fallbacks`)
+    }
+  }
+
   if (sourcePhone && appName && partnerToken.startsWith('sk_')) {
     try {
       return await postGupshupPartnerForm(
@@ -482,21 +493,6 @@ export async function sendGupshupTextMessage(
       const msg = err instanceof Error ? err.message : String(err)
       errors.push(`Partner /msg: ${msg}`)
       console.warn(`[gupshup-api] Partner /msg failed (${msg}); trying fallbacks`)
-    }
-  }
-
-  if (sourcePhone && appName && consoleKey && !consoleKey.startsWith('sk_')) {
-    try {
-      return await postGupshupSelfServe(consoleKey, '/wa/api/v1/msg', {
-        channel: 'whatsapp',
-        source: sourcePhone,
-        destination: dest,
-        'src.name': appName,
-        message: JSON.stringify(ssMessage),
-      })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      errors.push(`Self-Serve: ${msg}`)
     }
   }
 
@@ -563,7 +559,7 @@ export async function sendGupshupMediaMessage(
   })
   return withSelfServeOrV3(
     () => sendGupshupV3Message({ appId, apiToken, body }),
-    resolvedSs && selfServeKey && !selfServeKey.startsWith('sk_')
+    resolvedSs && selfServeKey
       ? () => {
           // Self-Serve uses "file" for documents.
           const ssType = kind === 'document' ? 'file' : kind
@@ -702,15 +698,9 @@ function buildTemplateMediaMessageFormValue(
 /**
  * Send an approved WhatsApp template.
  *
- * DigiGlobal (and most Partner installs) authenticate with an `sk_` App
- * Access Token. V3 passthrough often returns "Please review the request
- * parameters" for those apps. The working Partner endpoint is:
- *   POST /partner/app/{appId}/template/msg
- * with the same form shape as Self-Serve (template id + params).
- *
- * Order:
- * 1. Partner /template/msg (sk_ + Gupshup UUID)
- * 2. Self-Serve /wa/api/v1/template/msg (Console apikey)
+ * Order (Self-Serve first — DigiGlobal accepts sk_ as `apikey`):
+ * 1. Self-Serve /wa/api/v1/template/msg
+ * 2. Partner /partner/app/{appId}/template/msg
  * 3. Partner V3 Meta-shaped /v3/message
  */
 export async function sendGupshupTemplateMessage(
@@ -778,11 +768,11 @@ export async function sendGupshupTemplateMessage(
   }
 
   const resolvedSs = resolveGupshupSelfServeContext(selfServe)
-  const consoleKey = pickGupshupSelfServeApiKey({
-    storedToken: selfServe?.apiKey ?? resolvedSs?.apiKey,
-    partnerAppToken: null,
-  })
   const partnerToken = normalizeGupshupApiToken(apiToken)
+  const ssKey = pickGupshupSelfServeApiKey({
+    storedToken: selfServe?.apiKey ?? resolvedSs?.apiKey,
+    partnerAppToken: partnerToken,
+  })
   const templateUuid = template?.meta_template_id?.trim() || ''
   const hasUuid = isGupshupTemplateUuid(templateUuid)
   const sourcePhone = resolvedSs?.sourcePhone
@@ -791,27 +781,66 @@ export async function sendGupshupTemplateMessage(
   const appName = resolvedSs?.appName?.trim() || ''
   const errors: string[] = []
 
-  // 1) Partner native template API — correct path for sk_ tokens.
+  const buildTemplateForm = (): Record<string, string> => {
+    const form: Record<string, string> = {
+      channel: 'whatsapp',
+      source: sourcePhone,
+      destination: dest,
+      'src.name': appName,
+      template: JSON.stringify({
+        id: templateUuid,
+        params: flatParams.map(String),
+      }),
+    }
+    if (template) {
+      const media = buildTemplateMediaMessageFormValue(template, messageParams)
+      if (media) form.message = media
+    }
+    return form
+  }
+
+  // 1) Self-Serve — DigiGlobal accepts sk_ as apikey; Partner often 400s.
+  if (hasUuid && sourcePhone && appName && ssKey) {
+    try {
+      console.log(
+        '[gupshup-api] template via Self-Serve /wa/api/v1/template/msg',
+        JSON.stringify({
+          templateId: templateUuid,
+          templateName,
+          paramCount: flatParams.length,
+        }),
+      )
+      return await postGupshupSelfServe(
+        ssKey,
+        '/wa/api/v1/template/msg',
+        buildTemplateForm(),
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Self-Serve: ${msg}`)
+      console.warn(`[gupshup-api] Self-Serve template failed (${msg})`)
+    }
+  } else {
+    console.warn(
+      '[gupshup-api] Self-Serve template skipped',
+      JSON.stringify({
+        hasUuid,
+        hasSourcePhone: Boolean(sourcePhone),
+        hasAppName: Boolean(appName),
+        hasApiKey: Boolean(ssKey),
+        templateName,
+        meta_template_id: templateUuid || null,
+        hint: !hasUuid
+          ? 'meta_template_id is not a Gupshup UUID — Sync from Gupshup'
+          : null,
+      }),
+    )
+  }
+
+  // 2) Partner native template API.
   if (hasUuid && sourcePhone && appName && partnerToken) {
     try {
-      const form: Record<string, string> = {
-        channel: 'whatsapp',
-        source: sourcePhone,
-        destination: dest,
-        'src.name': appName,
-        sandbox: 'false',
-        template: JSON.stringify({
-          id: templateUuid,
-          params: flatParams.map(String),
-        }),
-      }
-      if (template) {
-        const media = buildTemplateMediaMessageFormValue(
-          template,
-          messageParams,
-        )
-        if (media) form.message = media
-      }
+      const form = { ...buildTemplateForm(), sandbox: 'false' }
       console.log(
         '[gupshup-api] template via Partner /template/msg',
         JSON.stringify({
@@ -831,58 +860,6 @@ export async function sendGupshupTemplateMessage(
       const msg = err instanceof Error ? err.message : String(err)
       errors.push(`Partner /template/msg: ${msg}`)
       console.warn(`[gupshup-api] Partner /template/msg failed (${msg})`)
-    }
-  } else {
-    console.warn(
-      '[gupshup-api] Partner /template/msg skipped',
-      JSON.stringify({
-        hasUuid,
-        hasSourcePhone: Boolean(sourcePhone),
-        hasAppName: Boolean(appName),
-        templateName,
-        meta_template_id: templateUuid || null,
-        hint: !hasUuid
-          ? 'meta_template_id is not a Gupshup UUID — Sync from Gupshup'
-          : null,
-      }),
-    )
-  }
-
-  // 2) Self-Serve Console apikey path.
-  if (
-    hasUuid &&
-    sourcePhone &&
-    appName &&
-    consoleKey &&
-    !consoleKey.startsWith('sk_')
-  ) {
-    try {
-      const form: Record<string, string> = {
-        channel: 'whatsapp',
-        source: sourcePhone,
-        destination: dest,
-        'src.name': appName,
-        template: JSON.stringify({
-          id: templateUuid,
-          params: flatParams.map(String),
-        }),
-      }
-      if (template) {
-        const media = buildTemplateMediaMessageFormValue(
-          template,
-          messageParams,
-        )
-        if (media) form.message = media
-      }
-      return await postGupshupSelfServe(
-        consoleKey,
-        '/wa/api/v1/template/msg',
-        form,
-      )
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      errors.push(`Self-Serve: ${msg}`)
-      console.warn(`[gupshup-api] Self-Serve template failed (${msg})`)
     }
   }
 
@@ -972,7 +949,7 @@ export async function sendGupshupReactionMessage(
   })
   return withSelfServeOrV3(
     () => sendGupshupV3Message({ appId, apiToken, body }),
-    resolvedSs && selfServeKey && !selfServeKey.startsWith('sk_')
+    resolvedSs && selfServeKey
       ? () => {
           const form: Record<string, string> = {
             channel: 'whatsapp',
