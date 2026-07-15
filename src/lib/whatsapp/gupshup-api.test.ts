@@ -234,18 +234,18 @@ describe('buildGupshupSelfServeTemplateParams', () => {
   })
 })
 
-describe('sendGupshupTemplateMessage Self-Serve', () => {
-  it('POSTs form-urlencoded /wa/api/v1/template/msg with Gupshup UUID', async () => {
+describe('sendGupshupTemplateMessage Partner /template/msg', () => {
+  it('POSTs Partner /template/msg with sk_ token + Gupshup UUID', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      status: 202,
-      json: async () => ({ status: 'submitted', messageId: 'ss-tpl-1' }),
+      status: 200,
+      json: async () => ({ status: 'submitted', messageId: 'pt-tpl-1' }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
     const { sendGupshupTemplateMessage } = await import('./gupshup-api')
     const result = await sendGupshupTemplateMessage({
-      appId: 'app-123',
+      appId: 'a471d262-1c6b-482b-a8b2-25613ddaecb1',
       apiToken: 'sk_partner_token',
       to: '919876543210',
       templateName: 'welcome_message',
@@ -262,14 +262,15 @@ describe('sendGupshupTemplateMessage Self-Serve', () => {
       selfServe: {
         sourcePhone: '918282095942',
         appName: 'DigiGlobal',
-        apiKey: 'consolehexapikey123',
       },
     })
 
-    expect(result.messageId).toBe('ss-tpl-1')
+    expect(result.messageId).toBe('pt-tpl-1')
     const [url, opts] = fetchMock.mock.calls[0]
-    expect(url).toContain('/wa/api/v1/template/msg')
-    expect(opts.headers.apikey).toBe('consolehexapikey123')
+    expect(url).toContain(
+      '/partner/app/a471d262-1c6b-482b-a8b2-25613ddaecb1/template/msg',
+    )
+    expect(opts.headers.Authorization).toBe('sk_partner_token')
     expect(opts.headers['Content-Type']).toBe(
       'application/x-www-form-urlencoded',
     )
@@ -283,7 +284,7 @@ describe('sendGupshupTemplateMessage Self-Serve', () => {
     })
   })
 
-  it('skips Self-Serve when template id is a Meta numeric id', async () => {
+  it('falls back to V3 when template id is a Meta numeric id', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -314,7 +315,7 @@ describe('sendGupshupTemplateMessage Self-Serve', () => {
     })
 
     const urls = fetchMock.mock.calls.map((c) => String(c[0]))
-    expect(urls.some((u) => u.includes('/wa/api/v1/template/msg'))).toBe(false)
+    expect(urls.some((u) => u.includes('/template/msg'))).toBe(false)
     expect(urls.some((u) => u.includes('/v3/message'))).toBe(true)
   })
 })

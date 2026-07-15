@@ -429,7 +429,7 @@ export interface SendGupshupTextMessageArgs {
   selfServe?: GupshupSelfServeContext | null
 }
 
-/** Send a session text message (V3, with Self-Serve fallback). */
+/** Send a session text message (Partner /msg → Self-Serve → V3). */
 export async function sendGupshupTextMessage(
   args: SendGupshupTextMessageArgs,
 ): Promise<GupshupSendResult> {
@@ -447,32 +447,68 @@ export async function sendGupshupTextMessage(
   }
 
   const resolvedSs = resolveGupshupSelfServeContext(selfServe)
-  const selfServeKey = pickGupshupSelfServeApiKey({
+  const consoleKey = pickGupshupSelfServeApiKey({
     storedToken: selfServe?.apiKey,
-    partnerAppToken: apiToken,
+    partnerAppToken: null,
   })
-  return withSelfServeOrV3(
-    () => sendGupshupV3Message({ appId, apiToken, body }),
-    resolvedSs && selfServeKey && !selfServeKey.startsWith('sk_')
-      ? () => {
-          const message: Record<string, unknown> = {
-            type: 'text',
-            text,
-          }
-          if (contextMessageId) {
-            message.context = { msgId: contextMessageId }
-          }
-          return postGupshupSelfServe(selfServeKey, '/wa/api/v1/msg', {
-            channel: 'whatsapp',
-            source: digitsOnly(resolvedSs.sourcePhone!),
-            destination: dest,
-            'src.name': resolvedSs.appName!.trim(),
-            message: JSON.stringify(message),
-          })
-        }
-      : null,
-    selfServe,
-  )
+  const partnerToken = normalizeGupshupApiToken(apiToken)
+  const sourcePhone = resolvedSs?.sourcePhone
+    ? digitsOnly(resolvedSs.sourcePhone)
+    : ''
+  const appName = resolvedSs?.appName?.trim() || ''
+  const errors: string[] = []
+
+  const ssMessage: Record<string, unknown> = { type: 'text', text }
+  if (contextMessageId) {
+    ssMessage.context = { msgId: contextMessageId }
+  }
+
+  // Partner /msg with sk_ (same auth DigiGlobal already has).
+  if (sourcePhone && appName && partnerToken.startsWith('sk_')) {
+    try {
+      return await postGupshupPartnerForm(
+        appId,
+        partnerToken,
+        `/partner/app/${appId}/msg`,
+        {
+          channel: 'whatsapp',
+          source: sourcePhone,
+          destination: dest,
+          'src.name': appName,
+          message: JSON.stringify(ssMessage),
+        },
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Partner /msg: ${msg}`)
+      console.warn(`[gupshup-api] Partner /msg failed (${msg}); trying fallbacks`)
+    }
+  }
+
+  if (sourcePhone && appName && consoleKey && !consoleKey.startsWith('sk_')) {
+    try {
+      return await postGupshupSelfServe(consoleKey, '/wa/api/v1/msg', {
+        channel: 'whatsapp',
+        source: sourcePhone,
+        destination: dest,
+        'src.name': appName,
+        message: JSON.stringify(ssMessage),
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Self-Serve: ${msg}`)
+    }
+  }
+
+  try {
+    return await sendGupshupV3Message({ appId, apiToken: partnerToken, body })
+  } catch (err) {
+    const v3Message = err instanceof Error ? err.message : String(err)
+    errors.push(`Partner V3: ${v3Message}`)
+    throw new Error(
+      `${errors.join(' | ')}. ${missingSelfServeHint(selfServe)}`,
+    )
+  }
 }
 
 export interface SendGupshupMediaMessageArgs {
@@ -567,12 +603,115 @@ export interface SendGupshupTemplateMessageArgs {
   selfServe?: GupshupSelfServeContext | null
 }
 
+async function postGupshupPartnerForm(
+  appId: string,
+  apiToken: string,
+  path: string,
+  form: Record<string, string>,
+): Promise<GupshupSendResult> {
+  const url = `${GUPSHUP_PARTNER_BASE}${path}`
+  const token = normalizeGupshupApiToken(apiToken)
+
+  console.log(
+    '[gupshup-api] partner form attempt',
+    JSON.stringify({
+      path,
+      source: form.source ?? null,
+      destination: form.destination ?? null,
+      appName: form['src.name'] ?? null,
+      tokenPrefix: token.slice(0, 6),
+      tokenLen: token.length,
+      hasTemplate: Boolean(form.template),
+      hasMessage: Boolean(form.message),
+    }),
+  )
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: token,
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Connection: 'keep-alive',
+    },
+    body: new URLSearchParams(form).toString(),
+  })
+
+  let data: GupshupErrorResponse = {}
+  try {
+    data = (await response.json()) as GupshupErrorResponse
+  } catch {
+    if (!response.ok) {
+      throw new Error(`Gupshup Partner API error: ${response.status}`)
+    }
+    throw new Error('Gupshup Partner returned an unreadable response')
+  }
+
+  if (!response.ok || data.status === 'error') {
+    const message = extractGupshupErrorMessage(
+      data,
+      `Gupshup Partner API error: ${response.status}`,
+    )
+    console.error(
+      '[gupshup-api] partner form failed',
+      JSON.stringify({ status: response.status, message, body: data }),
+    )
+    throw new Error(message)
+  }
+
+  const messageId = data.messageId || data.messages?.[0]?.id
+  if (!messageId) {
+    throw new Error(
+      extractGupshupErrorMessage(data, 'Gupshup Partner returned no message id'),
+    )
+  }
+
+  console.log(
+    '[gupshup-api] partner form ok',
+    JSON.stringify({ status: response.status, message_id: messageId }),
+  )
+  return { messageId }
+}
+
+function buildTemplateMediaMessageFormValue(
+  template: MessageTemplate,
+  messageParams?: SendTimeParams,
+): string | null {
+  const headerType = template.header_type?.toLowerCase()
+  if (
+    headerType !== 'image' &&
+    headerType !== 'video' &&
+    headerType !== 'document'
+  ) {
+    return null
+  }
+  const link =
+    messageParams?.headerMediaUrl || template.header_media_url || ''
+  if (!link) {
+    throw new Error(
+      `${headerType} template requires a public media URL (message.link)`,
+    )
+  }
+  const mediaType = headerType === 'document' ? 'document' : headerType
+  return JSON.stringify({
+    type: mediaType,
+    [mediaType]: { link },
+  })
+}
+
 /**
  * Send an approved WhatsApp template.
  *
- * Preferred path (Gupshup docs): POST /wa/api/v1/template/msg with
- *   template={"id":"<gupshup-uuid>","params":[...]} + optional media message.
- * Fallback: Partner V3 Meta-shaped /v3/message (form-urlencoded first).
+ * DigiGlobal (and most Partner installs) authenticate with an `sk_` App
+ * Access Token. V3 passthrough often returns "Please review the request
+ * parameters" for those apps. The working Partner endpoint is:
+ *   POST /partner/app/{appId}/template/msg
+ * with the same form shape as Self-Serve (template id + params).
+ *
+ * Order:
+ * 1. Partner /template/msg (sk_ + Gupshup UUID)
+ * 2. Self-Serve /wa/api/v1/template/msg (Console apikey)
+ * 3. Partner V3 Meta-shaped /v3/message
  */
 export async function sendGupshupTemplateMessage(
   args: SendGupshupTemplateMessageArgs,
@@ -639,87 +778,129 @@ export async function sendGupshupTemplateMessage(
   }
 
   const resolvedSs = resolveGupshupSelfServeContext(selfServe)
-  const selfServeKey = pickGupshupSelfServeApiKey({
+  const consoleKey = pickGupshupSelfServeApiKey({
     storedToken: selfServe?.apiKey ?? resolvedSs?.apiKey,
-    partnerAppToken: apiToken,
+    partnerAppToken: null,
   })
-  const templateUuid = template?.meta_template_id
-  const canTemplateSelfServe = Boolean(
-    resolvedSs &&
-      selfServeKey &&
-      !selfServeKey.startsWith('sk_') &&
-      isGupshupTemplateUuid(templateUuid),
-  )
+  const partnerToken = normalizeGupshupApiToken(apiToken)
+  const templateUuid = template?.meta_template_id?.trim() || ''
+  const hasUuid = isGupshupTemplateUuid(templateUuid)
+  const sourcePhone = resolvedSs?.sourcePhone
+    ? digitsOnly(resolvedSs.sourcePhone)
+    : ''
+  const appName = resolvedSs?.appName?.trim() || ''
+  const errors: string[] = []
 
-  const runSelfServe = canTemplateSelfServe
-    ? () => {
-        const headerType = template!.header_type?.toLowerCase()
-        const mediaLink =
-          messageParams?.headerMediaUrl || template!.header_media_url || ''
-
-        if (
-          (headerType === 'image' ||
-            headerType === 'video' ||
-            headerType === 'document') &&
-          !mediaLink
-        ) {
-          throw new Error(
-            `${headerType} template requires a public media URL (message.link) for Gupshup Self-Serve`,
-          )
-        }
-
-        const form: Record<string, string> = {
-          channel: 'whatsapp',
-          source: digitsOnly(resolvedSs!.sourcePhone!),
-          destination: dest,
-          'src.name': resolvedSs!.appName!.trim(),
-          template: JSON.stringify({
-            id: templateUuid,
-            params: flatParams.map(String),
-          }),
-        }
-
-        if (
-          headerType === 'image' ||
-          headerType === 'video' ||
-          headerType === 'document'
-        ) {
-          const mediaType = headerType === 'document' ? 'document' : headerType
-          const mediaObj: Record<string, string> = { link: mediaLink }
-          form.message = JSON.stringify({
-            type: mediaType,
-            [mediaType]: mediaObj,
-          })
-        }
-
-        console.log(
-          '[gupshup-api] template self-serve',
-          JSON.stringify({
-            templateId: templateUuid,
-            templateName,
-            paramCount: flatParams.length,
-            media: headerType || null,
-          }),
-        )
-
-        return postGupshupSelfServe(selfServeKey!, '/wa/api/v1/template/msg', form)
+  // 1) Partner native template API — correct path for sk_ tokens.
+  if (hasUuid && sourcePhone && appName && partnerToken) {
+    try {
+      const form: Record<string, string> = {
+        channel: 'whatsapp',
+        source: sourcePhone,
+        destination: dest,
+        'src.name': appName,
+        sandbox: 'false',
+        template: JSON.stringify({
+          id: templateUuid,
+          params: flatParams.map(String),
+        }),
       }
-    : null
+      if (template) {
+        const media = buildTemplateMediaMessageFormValue(
+          template,
+          messageParams,
+        )
+        if (media) form.message = media
+      }
+      console.log(
+        '[gupshup-api] template via Partner /template/msg',
+        JSON.stringify({
+          appId,
+          templateId: templateUuid,
+          templateName,
+          paramCount: flatParams.length,
+        }),
+      )
+      return await postGupshupPartnerForm(
+        appId,
+        partnerToken,
+        `/partner/app/${appId}/template/msg`,
+        form,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Partner /template/msg: ${msg}`)
+      console.warn(`[gupshup-api] Partner /template/msg failed (${msg})`)
+    }
+  } else {
+    console.warn(
+      '[gupshup-api] Partner /template/msg skipped',
+      JSON.stringify({
+        hasUuid,
+        hasSourcePhone: Boolean(sourcePhone),
+        hasAppName: Boolean(appName),
+        templateName,
+        meta_template_id: templateUuid || null,
+        hint: !hasUuid
+          ? 'meta_template_id is not a Gupshup UUID — Sync from Gupshup'
+          : null,
+      }),
+    )
+  }
 
-  // Partner docs show form-urlencoded for V3 templates — try form first.
-  const runV3 = async () => {
-    const attempts: Array<{ encoding: 'json' | 'form'; authMode: V3AuthMode }> = [
-      { encoding: 'form', authMode: 'raw' },
-      { encoding: 'form', authMode: 'bearer' },
-      { encoding: 'json', authMode: 'raw' },
-      { encoding: 'json', authMode: 'bearer' },
-    ]
+  // 2) Self-Serve Console apikey path.
+  if (
+    hasUuid &&
+    sourcePhone &&
+    appName &&
+    consoleKey &&
+    !consoleKey.startsWith('sk_')
+  ) {
+    try {
+      const form: Record<string, string> = {
+        channel: 'whatsapp',
+        source: sourcePhone,
+        destination: dest,
+        'src.name': appName,
+        template: JSON.stringify({
+          id: templateUuid,
+          params: flatParams.map(String),
+        }),
+      }
+      if (template) {
+        const media = buildTemplateMediaMessageFormValue(
+          template,
+          messageParams,
+        )
+        if (media) form.message = media
+      }
+      return await postGupshupSelfServe(
+        consoleKey,
+        '/wa/api/v1/template/msg',
+        form,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Self-Serve: ${msg}`)
+      console.warn(`[gupshup-api] Self-Serve template failed (${msg})`)
+    }
+  }
+
+  // 3) V3 Meta-shaped last resort.
+  try {
+    const attempts: Array<{ encoding: 'json' | 'form'; authMode: V3AuthMode }> =
+      [
+        { encoding: 'form', authMode: 'raw' },
+        { encoding: 'json', authMode: 'raw' },
+        { encoding: 'form', authMode: 'bearer' },
+        { encoding: 'json', authMode: 'bearer' },
+      ]
     let lastError: Error | null = null
     for (const attempt of attempts) {
       try {
         return await postGupshupV3(
           appId,
-          apiToken,
+          partnerToken,
           v3Body,
           attempt.encoding,
           attempt.authMode,
@@ -736,24 +917,26 @@ export async function sendGupshupTemplateMessage(
       }
     }
     throw lastError ?? new Error('Gupshup V3 template send failed')
-  }
-
-  if (!canTemplateSelfServe && resolvedSs && template?.meta_template_id) {
-    console.warn(
-      '[gupshup-api] template Self-Serve skipped',
-      JSON.stringify({
-        reason: !selfServeKey || selfServeKey.startsWith('sk_')
-          ? 'missing_console_apikey'
-          : !isGupshupTemplateUuid(templateUuid)
-            ? 'meta_numeric_id_not_gupshup_uuid'
-            : 'incomplete_self_serve_context',
-        templateName,
-        meta_template_id: template.meta_template_id,
-      }),
+  } catch (err) {
+    const v3Message = err instanceof Error ? err.message : String(err)
+    errors.push(`Partner V3: ${v3Message}`)
+    const setupHints: string[] = []
+    if (!hasUuid) {
+      setupHints.push(
+        'template meta_template_id must be a Gupshup UUID — run Sync from Gupshup',
+      )
+    }
+    if (!sourcePhone || !appName) {
+      setupHints.push(
+        'set display phone + gupshup_app_name on the WhatsApp config',
+      )
+    }
+    throw new Error(
+      `${errors.join(' | ')}${
+        setupHints.length ? ` | Fix: ${setupHints.join('; ')}` : ''
+      }`,
     )
   }
-
-  return withSelfServeOrV3(runV3, runSelfServe, selfServe)
 }
 
 export interface SendGupshupReactionMessageArgs {

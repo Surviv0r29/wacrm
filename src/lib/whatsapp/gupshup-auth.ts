@@ -44,12 +44,17 @@ export function pickGupshupSelfServeApiKey(args: {
   storedToken?: string | null
   partnerAppToken?: string | null
 }): string | null {
+  const envKey =
+    process.env.GUPSHUP_API_KEY?.trim() ||
+    process.env.GUPSHUP_WA_API_KEY?.trim() ||
+    null
   const stored = args.storedToken?.trim() || null
   const partner = args.partnerAppToken?.trim() || null
+  // Self-Serve needs the Console hex apikey (never sk_).
+  if (envKey && !envKey.startsWith('sk_')) return envKey
   if (stored && !stored.startsWith('sk_')) return stored
   if (partner && !partner.startsWith('sk_')) return partner
-  // Last resort: some tenants only have sk_ — Self-Serve will usually 401.
-  return stored || partner
+  return null
 }
 
 /** Partner app ids are UUIDs — not Meta phone_number_id numerics. */
