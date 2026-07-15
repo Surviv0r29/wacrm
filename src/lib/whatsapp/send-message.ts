@@ -48,6 +48,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -80,6 +81,8 @@ export interface SendMessageParams {
   filename?: string | null;
   templateName?: string | null;
   templateLanguage?: string | null;
+  /** Prefer this local message_templates.id when resolving the row. */
+  templateId?: string | null;
   /** Legacy positional body params (only used if messageParams.body unset). */
   templateParams?: string[];
   /** Structured template params (header/body/buttons). */
@@ -183,6 +186,7 @@ export async function sendMessageToConversation(
     filename,
     templateName,
     templateLanguage,
+    templateId,
     templateParams,
     templateMessageParams,
     replyToMessageId,
@@ -295,37 +299,87 @@ export async function sendMessageToConversation(
 
   const gupshupReplyContext = gupshupContextMessageId(contextMessageId);
 
-  // Template row (for header + button components). isMessageTemplate
-  // guards against a malformed local row crashing the send-builder.
+  // Template row (for header + button components). Prefer an explicit
+  // template_id from the UI — multiple APPROVED rows can share the same
+  // name/language after re-sync, and name-only lookup picks the wrong one
+  // (wrong {{n}} count or a media header the picker wasn't showing).
   let templateRow: MessageTemplate | null = null;
-  if (messageType === 'template' && templateName) {
-    const lang = templateLanguage || 'en_US';
-    let { data } = await db
-      .from('message_templates')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('name', templateName)
-      .eq('language', lang)
-      .maybeSingle();
-    // Gupshup sync stores short codes (`en`); callers may pass `en_US`.
-    if (!data) {
-      const { data: byName } = await db
+  if (messageType === 'template' && (templateId || templateName)) {
+    if (templateId) {
+      const { data: byId } = await db
+        .from('message_templates')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('id', templateId)
+        .maybeSingle();
+      if (byId && isMessageTemplate(byId)) {
+        templateRow = byId;
+      }
+    }
+    if (!templateRow && templateName) {
+      const lang = templateLanguage || 'en_US';
+      let { data } = await db
         .from('message_templates')
         .select('*')
         .eq('account_id', accountId)
         .eq('name', templateName)
+        .eq('language', lang)
+        .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      data = byName;
+      // Gupshup sync stores short codes (`en`); callers may pass `en_US`.
+      if (!data) {
+        const langBase = lang.split(/[_-]/)[0]?.toLowerCase();
+        const { data: byName } = await db
+          .from('message_templates')
+          .select('*')
+          .eq('account_id', accountId)
+          .eq('name', templateName)
+          .order('created_at', { ascending: false });
+        const rows = (byName ?? []).filter(isMessageTemplate);
+        data =
+          rows.find(
+            (r) =>
+              (r.language ?? '').split(/[_-]/)[0]?.toLowerCase() === langBase,
+          ) ??
+          rows[0] ??
+          null;
+      }
+      if (data && !isMessageTemplate(data)) {
+        throw new SendMessageError(
+          'template_malformed',
+          'Template row is malformed locally — run "Sync from Gupshup/Meta" in Settings to repair it.',
+          500,
+        );
+      }
+      templateRow = data && isMessageTemplate(data) ? data : null;
     }
-    if (data && !isMessageTemplate(data)) {
-      throw new SendMessageError(
-        'template_malformed',
-        'Template row is malformed locally — run "Sync from Meta" in Settings to repair it.',
-        500
-      );
-    }
-    templateRow = data ?? null;
+  }
+
+  const resolvedTemplateLanguage =
+    templateLanguage || templateRow?.language || 'en_US';
+  const structuredParams = coerceSendTimeParams(
+    templateMessageParams,
+    templateParams,
+  );
+
+  // Fail early with a clear message for media-header templates that have
+  // no sample URL stored (common on Gupshup image templates).
+  if (
+    messageType === 'template' &&
+    templateRow &&
+    (templateRow.header_type === 'image' ||
+      templateRow.header_type === 'video' ||
+      templateRow.header_type === 'document') &&
+    !structuredParams.headerMediaUrl &&
+    !structuredParams.headerMediaId &&
+    !templateRow.header_media_url
+  ) {
+    throw new SendMessageError(
+      'bad_request',
+      `Template "${templateRow.name}" has a ${templateRow.header_type} header but no media URL. Add a public image/video/document URL when sending.`,
+      400,
+    );
   }
 
   const attempt = async (phone: string): Promise<string> => {
@@ -351,11 +405,11 @@ export async function sendMessageToConversation(
           appId,
           apiToken,
           to: phone,
-          templateName: templateName!,
-          language: templateLanguage || 'en_US',
+          templateName: templateRow?.name || templateName!,
+          language: resolvedTemplateLanguage,
           template: templateRow ?? undefined,
-          messageParams: templateMessageParams ?? undefined,
-          params: templateParams || [],
+          messageParams: structuredParams,
+          params: structuredParams.body || [],
           contextMessageId: gupshupReplyContext,
           selfServe: {
             sourcePhone: config.display_phone_number,
@@ -412,11 +466,11 @@ export async function sendMessageToConversation(
         phoneNumberId: config.phone_number_id,
         accessToken,
         to: phone,
-        templateName: templateName!,
-        language: templateLanguage || 'en_US',
+        templateName: templateRow?.name || templateName!,
+        language: resolvedTemplateLanguage,
         template: templateRow ?? undefined,
-        messageParams: templateMessageParams ?? undefined,
-        params: templateParams || [],
+        messageParams: structuredParams,
+        params: structuredParams.body,
         contextMessageId,
       });
       return result.messageId;
@@ -566,4 +620,36 @@ export async function sendMessageToConversation(
   }
 
   return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+}
+
+/** Normalize the loosely typed UI/API payload into SendTimeParams. */
+function coerceSendTimeParams(
+  raw: unknown,
+  fallbackBody?: string[] | null,
+): SendTimeParams {
+  const out: SendTimeParams = {};
+  if (Array.isArray(fallbackBody)) {
+    out.body = fallbackBody.map(String);
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return out;
+  }
+  const o = raw as Record<string, unknown>;
+  if (Array.isArray(o.body)) {
+    out.body = o.body.map((v) => String(v ?? ''));
+  }
+  if (typeof o.headerText === 'string') out.headerText = o.headerText;
+  if (typeof o.headerMediaUrl === 'string') out.headerMediaUrl = o.headerMediaUrl;
+  if (typeof o.headerMediaId === 'string') out.headerMediaId = o.headerMediaId;
+  if (o.buttonParams && typeof o.buttonParams === 'object') {
+    const buttons: Record<number, string> = {};
+    for (const [k, v] of Object.entries(
+      o.buttonParams as Record<string, unknown>,
+    )) {
+      const idx = Number(k);
+      if (Number.isFinite(idx)) buttons[idx] = String(v ?? '');
+    }
+    out.buttonParams = buttons;
+  }
+  return out;
 }

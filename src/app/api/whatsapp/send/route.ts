@@ -178,6 +178,7 @@ export async function POST(request: Request) {
         filename,
         templateName: template_name,
         templateLanguage: template_language,
+        templateId: body.template_id ?? null,
         templateParams: template_params,
         templateMessageParams: template_message_params,
         replyToMessageId: reply_to_message_id,

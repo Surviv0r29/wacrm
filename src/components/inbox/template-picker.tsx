@@ -26,6 +26,7 @@ import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
 export interface TemplateSendValues {
   body: string[];
   headerText?: string;
+  headerMediaUrl?: string;
   buttonParams?: Record<number, string>;
 }
 
@@ -230,9 +231,18 @@ export function TemplatePicker({
   const [buttonSources, setButtonSources] = useState<
     Record<number, VarSource>
   >({});
+  const [headerMediaUrl, setHeaderMediaUrl] = useState("");
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customValues, setCustomValues] = useState<Map<string, string>>(
     () => new Map(),
+  );
+
+  const needsHeaderMedia = Boolean(
+    selected &&
+      (selected.header_type === "image" ||
+        selected.header_type === "video" ||
+        selected.header_type === "document") &&
+      !selected.header_media_url,
   );
 
   useEffect(() => {
@@ -306,6 +316,7 @@ export function TemplatePicker({
     setSelected(null);
     setBodySources([]);
     setHeaderSource({ kind: "static", value: "" });
+    setHeaderMediaUrl("");
     setButtonSources({});
   }
 
@@ -316,12 +327,21 @@ export function TemplatePicker({
 
   function pickTemplate(template: MessageTemplate) {
     const slots = collectVariableSlots(template);
+    const needsMedia =
+      (template.header_type === "image" ||
+        template.header_type === "video" ||
+        template.header_type === "document") &&
+      !template.header_media_url;
     const noInputsNeeded =
       slots.bodyVars.length === 0 &&
       slots.headerVarCount === 0 &&
-      slots.urlButtonSlots.length === 0;
+      slots.urlButtonSlots.length === 0 &&
+      !needsMedia;
     if (noInputsNeeded) {
-      onSelect(template, { body: [] });
+      onSelect(template, {
+        body: [],
+        headerMediaUrl: template.header_media_url || undefined,
+      });
       handleOpenChange(false);
       return;
     }
@@ -330,6 +350,7 @@ export function TemplatePicker({
       slots.bodyVars.map(() => ({ kind: "static" as const, value: "" })),
     );
     setHeaderSource({ kind: "static", value: "" });
+    setHeaderMediaUrl(template.header_media_url ?? "");
     setButtonSources({});
   }
 
@@ -359,6 +380,9 @@ export function TemplatePicker({
     if (!selected || !slots) return;
     const values: TemplateSendValues = { body: resolvedBody };
     if (slots.headerVarCount > 0) values.headerText = resolvedHeader.trim();
+    const media =
+      headerMediaUrl.trim() || selected.header_media_url?.trim() || "";
+    if (media) values.headerMediaUrl = media;
     if (Object.keys(resolvedButtons).length > 0) {
       values.buttonParams = Object.fromEntries(
         Object.entries(resolvedButtons).map(([k, v]) => [
@@ -378,7 +402,8 @@ export function TemplatePicker({
     (slots.headerVarCount === 0 || resolvedHeader.trim().length > 0) &&
     slots.urlButtonSlots.every(
       (s) => (resolvedButtons[s.index] ?? "").trim().length > 0,
-    );
+    ) &&
+    (!needsHeaderMedia || headerMediaUrl.trim().length > 0);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -457,6 +482,24 @@ export function TemplatePicker({
                 </p>
               )}
             </div>
+            {needsHeaderMedia && (
+              <div className="space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 p-2">
+                <Label className="text-xs text-popover-foreground">
+                  Header {selected.header_type} URL (required)
+                </Label>
+                <Input
+                  value={headerMediaUrl}
+                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                  placeholder="https://… public media URL"
+                  className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  This template has a media header but no stored sample URL.
+                  Paste a publicly reachable link for the{" "}
+                  {selected.header_type}.
+                </p>
+              </div>
+            )}
             {slots && slots.headerVarCount > 0 && (
               <VariableSourceEditor
                 label="Header {{1}}"
