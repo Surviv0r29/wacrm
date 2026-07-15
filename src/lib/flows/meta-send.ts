@@ -7,6 +7,13 @@ import {
   type InteractiveListSection,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
+import {
+  sendGupshupTextMessage,
+  sendGupshupMediaMessage,
+  type GupshupMediaKind,
+} from '@/lib/whatsapp/gupshup-api'
+import { resolveGupshupAppCredentials } from '@/lib/whatsapp/gupshup-auth'
+import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
@@ -89,6 +96,25 @@ export async function engineSendText(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    if (isGupshupProvider(config.provider)) {
+      const { appId, apiToken } = await resolveGupshupAppCredentials({
+        gupshup_app_id: config.gupshup_app_id,
+        gs_app_id: config.gs_app_id,
+        access_token: config.access_token,
+      })
+      const r = await sendGupshupTextMessage({
+        appId,
+        apiToken,
+        to: phone,
+        text: args.text,
+        selfServe: {
+          sourcePhone: config.display_phone_number,
+          appName: config.gupshup_app_name,
+        },
+      })
+      return r.messageId
+    }
+
     const r = await sendTextMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
@@ -98,7 +124,9 @@ export async function engineSendText(
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
+  const variants = isGupshupProvider(config.provider)
+    ? [sanitized]
+    : phoneVariants(sanitized)
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null
@@ -198,6 +226,28 @@ export async function engineSendMedia(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    if (isGupshupProvider(config.provider)) {
+      const { appId, apiToken } = await resolveGupshupAppCredentials({
+        gupshup_app_id: config.gupshup_app_id,
+        gs_app_id: config.gs_app_id,
+        access_token: config.access_token,
+      })
+      const r = await sendGupshupMediaMessage({
+        appId,
+        apiToken,
+        to: phone,
+        kind: args.kind as GupshupMediaKind,
+        link: args.link,
+        caption: args.caption,
+        filename: args.filename,
+        selfServe: {
+          sourcePhone: config.display_phone_number,
+          appName: config.gupshup_app_name,
+        },
+      })
+      return r.messageId
+    }
+
     const r = await sendMediaMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
@@ -210,7 +260,9 @@ export async function engineSendMedia(
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
+  const variants = isGupshupProvider(config.provider)
+    ? [sanitized]
+    : phoneVariants(sanitized)
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null

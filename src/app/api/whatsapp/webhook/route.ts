@@ -1,7 +1,8 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
+import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -44,17 +45,27 @@ function supabaseAdmin() {
   return _adminClient
 }
 
+interface MediaPayload {
+  id?: string
+  /** Gupshup (and some Meta-shaped) payloads may include a direct download URL. */
+  url?: string
+  link?: string
+  mime_type?: string
+  caption?: string
+  filename?: string
+}
+
 interface WhatsAppMessage {
   id: string
   from: string
   timestamp: string
   type: string
   text?: { body: string }
-  image?: { id: string; mime_type: string; caption?: string }
-  video?: { id: string; mime_type: string; caption?: string }
-  document?: { id: string; mime_type: string; filename?: string; caption?: string }
-  audio?: { id: string; mime_type: string }
-  sticker?: { id: string; mime_type: string }
+  image?: MediaPayload
+  video?: MediaPayload
+  document?: MediaPayload
+  audio?: MediaPayload
+  sticker?: MediaPayload
   location?: { latitude: number; longitude: number; name?: string; address?: string }
   reaction?: { message_id: string; emoji: string }
   /**
@@ -554,7 +565,8 @@ async function processWebhook(body: WebhookPayload) {
           // inserts that need it for NOT NULL FK compliance. Always
           // the admin who saved the WhatsApp config.
           config.user_id,
-          decryptedAccessToken
+          decryptedAccessToken,
+          config.provider ?? 'meta',
         )
       }
     }
@@ -875,7 +887,8 @@ async function processMessage(
   // (contacts, conversations). Always the admin who saved the
   // WhatsApp config; the choice is arbitrary post-017 but stable.
   configOwnerUserId: string,
-  accessToken: string
+  accessToken: string,
+  provider: string = 'meta',
 ) {
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
@@ -920,7 +933,7 @@ async function processMessage(
 
   // Parse message content based on type
   const { contentText, mediaUrl, mediaType, interactiveReplyId } =
-    await parseMessageContent(message, accessToken)
+    await parseMessageContent(message, accessToken, provider)
 
   // Resolve swipe-reply context if present. A missing parent is fine —
   // we just store NULL and the UI renders the message without a quote.
@@ -1136,7 +1149,8 @@ async function processMessage(
 
 async function parseMessageContent(
   message: WhatsAppMessage,
-  accessToken: string
+  accessToken: string,
+  provider: string = 'meta',
 ): Promise<{
   contentText: string | null
   mediaUrl: string | null
@@ -1150,20 +1164,30 @@ async function parseMessageContent(
    */
   interactiveReplyId: string | null
 }> {
-  // getMediaUrl signature is (mediaId, accessToken) — earlier code had
-  // the args swapped, so every verification hit an invalid Meta URL and
-  // fell through to the catch block, leaving mediaUrl as null. That's
-  // why images showed up as empty bubbles in the inbox.
-  const verifyAndBuildUrl = async (
-    mediaId: string
+  const gupshup = isGupshupProvider(provider)
+
+  // Prefer a direct download URL (Gupshup Self-Serve / some V3 payloads).
+  // Otherwise store our authenticated proxy path. Never call Meta's
+  // media Graph API with a Gupshup apikey — that yields "Authentication Error".
+  const resolveMediaUrl = async (
+    media: MediaPayload | undefined,
   ): Promise<string | null> => {
+    if (!media) return null
+    const direct = (media.url || media.link || '').trim()
+    if (direct.startsWith('http://') || direct.startsWith('https://')) {
+      return direct
+    }
+    if (!media.id) return null
+    if (gupshup) {
+      return `/api/whatsapp/media/${media.id}`
+    }
     try {
-      await getMediaUrl({ mediaId, accessToken })
-      return `/api/whatsapp/media/${mediaId}`
+      await getMediaUrl({ mediaId: media.id, accessToken })
+      return `/api/whatsapp/media/${media.id}`
     } catch (error) {
       console.error(
-        `Failed to verify media ${mediaId} with Meta:`,
-        error instanceof Error ? error.message : error
+        `Failed to verify media ${media.id} with Meta:`,
+        error instanceof Error ? error.message : error,
       )
       return null
     }
@@ -1183,45 +1207,45 @@ async function parseMessageContent(
       return { ...empty, contentText: message.text?.body || null }
 
     case 'image':
-      if (message.image?.id) {
+      if (message.image?.id || message.image?.url || message.image?.link) {
         return {
           ...empty,
           contentText: message.image.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.image.id),
-          mediaType: message.image.mime_type,
+          mediaUrl: await resolveMediaUrl(message.image),
+          mediaType: message.image.mime_type || null,
         }
       }
       return empty
 
     case 'video':
-      if (message.video?.id) {
+      if (message.video?.id || message.video?.url || message.video?.link) {
         return {
           ...empty,
           contentText: message.video.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.video.id),
-          mediaType: message.video.mime_type,
+          mediaUrl: await resolveMediaUrl(message.video),
+          mediaType: message.video.mime_type || null,
         }
       }
       return empty
 
     case 'document':
-      if (message.document?.id) {
+      if (message.document?.id || message.document?.url || message.document?.link) {
         return {
           ...empty,
           contentText:
             message.document.caption || message.document.filename || null,
-          mediaUrl: await verifyAndBuildUrl(message.document.id),
-          mediaType: message.document.mime_type,
+          mediaUrl: await resolveMediaUrl(message.document),
+          mediaType: message.document.mime_type || null,
         }
       }
       return empty
 
     case 'audio':
-      if (message.audio?.id) {
+      if (message.audio?.id || message.audio?.url || message.audio?.link) {
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.audio.id),
-          mediaType: message.audio.mime_type,
+          mediaUrl: await resolveMediaUrl(message.audio),
+          mediaType: message.audio.mime_type || null,
         }
       }
       return empty
@@ -1230,11 +1254,11 @@ async function parseMessageContent(
       // Stickers are images under the hood. Treat them as such so the
       // MessageBubble renders the <img>. The caller maps the DB
       // content_type to 'image' for the CHECK constraint.
-      if (message.sticker?.id) {
+      if (message.sticker?.id || message.sticker?.url || message.sticker?.link) {
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.sticker.id),
-          mediaType: message.sticker.mime_type,
+          mediaUrl: await resolveMediaUrl(message.sticker),
+          mediaType: message.sticker.mime_type || null,
         }
       }
       return empty
