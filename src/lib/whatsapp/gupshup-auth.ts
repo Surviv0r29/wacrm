@@ -36,6 +36,22 @@ export function normalizeGupshupApiToken(token: string): string {
   return trimmed
 }
 
+/**
+ * Self-Serve `/wa/api/v1/*` needs a Console hex `apikey`, not a Partner `sk_`
+ * token. Prefer the encrypted assign-time key when it isn't an sk_ token.
+ */
+export function pickGupshupSelfServeApiKey(args: {
+  storedToken?: string | null
+  partnerAppToken?: string | null
+}): string | null {
+  const stored = args.storedToken?.trim() || null
+  const partner = args.partnerAppToken?.trim() || null
+  if (stored && !stored.startsWith('sk_')) return stored
+  if (partner && !partner.startsWith('sk_')) return partner
+  // Last resort: some tenants only have sk_ — Self-Serve will usually 401.
+  return stored || partner
+}
+
 /** Partner app ids are UUIDs — not Meta phone_number_id numerics. */
 export function isLikelyGupshupAppId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(

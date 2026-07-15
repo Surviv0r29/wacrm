@@ -207,3 +207,114 @@ describe('sendGupshupMediaMessage', () => {
     expect(body.audio.caption).toBeUndefined()
   })
 })
+
+describe('buildGupshupSelfServeTemplateParams', () => {
+  it('flattens header + body + URL button params in occurrence order', async () => {
+    const { buildGupshupSelfServeTemplateParams } = await import('./gupshup-api')
+    const params = buildGupshupSelfServeTemplateParams(
+      {
+        id: 't1',
+        user_id: 'u1',
+        name: 'welcome',
+        body_text: 'Hi {{1}}, welcome to {{2}}',
+        header_type: 'text',
+        header_content: 'Hello {{1}}',
+        buttons: [
+          { type: 'URL', text: 'Open', url: 'https://example.com/{{1}}' },
+        ],
+        created_at: new Date().toISOString(),
+      },
+      {
+        headerText: 'Team',
+        body: ['Alex', 'Acme'],
+        buttonParams: { 0: 'promo' },
+      },
+    )
+    expect(params).toEqual(['Team', 'Alex', 'Acme', 'promo'])
+  })
+})
+
+describe('sendGupshupTemplateMessage Self-Serve', () => {
+  it('POSTs form-urlencoded /wa/api/v1/template/msg with Gupshup UUID', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ status: 'submitted', messageId: 'ss-tpl-1' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { sendGupshupTemplateMessage } = await import('./gupshup-api')
+    const result = await sendGupshupTemplateMessage({
+      appId: 'app-123',
+      apiToken: 'sk_partner_token',
+      to: '919876543210',
+      templateName: 'welcome_message',
+      language: 'en',
+      template: {
+        id: 'row1',
+        user_id: 'u1',
+        name: 'welcome_message',
+        body_text: 'Hi {{1}}',
+        meta_template_id: '81eeb971-6d09-4986-8346-f6ba713a1ec0',
+        created_at: new Date().toISOString(),
+      },
+      messageParams: { body: ['Alex'] },
+      selfServe: {
+        sourcePhone: '918282095942',
+        appName: 'DigiGlobal',
+        apiKey: 'consolehexapikey123',
+      },
+    })
+
+    expect(result.messageId).toBe('ss-tpl-1')
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toContain('/wa/api/v1/template/msg')
+    expect(opts.headers.apikey).toBe('consolehexapikey123')
+    expect(opts.headers['Content-Type']).toBe(
+      'application/x-www-form-urlencoded',
+    )
+    const form = new URLSearchParams(opts.body)
+    expect(form.get('source')).toBe('918282095942')
+    expect(form.get('destination')).toBe('919876543210')
+    expect(form.get('src.name')).toBe('DigiGlobal')
+    expect(JSON.parse(form.get('template')!)).toEqual({
+      id: '81eeb971-6d09-4986-8346-f6ba713a1ec0',
+      params: ['Alex'],
+    })
+  })
+
+  it('skips Self-Serve when template id is a Meta numeric id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: [{ id: 'v3-tpl-1' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { sendGupshupTemplateMessage } = await import('./gupshup-api')
+    await sendGupshupTemplateMessage({
+      appId: 'a471d262-1c6b-482b-a8b2-25613ddaecb1',
+      apiToken: 'sk_partner_token',
+      to: '919876543210',
+      templateName: 'instant_welcome',
+      language: 'en',
+      template: {
+        id: 'row2',
+        user_id: 'u1',
+        name: 'instant_welcome',
+        body_text: 'Hello',
+        meta_template_id: '1332403871780452',
+        created_at: new Date().toISOString(),
+      },
+      selfServe: {
+        sourcePhone: '918282095942',
+        appName: 'DigiGlobal',
+        apiKey: 'consolehexapikey123',
+      },
+    })
+
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('/wa/api/v1/template/msg'))).toBe(false)
+    expect(urls.some((u) => u.includes('/v3/message'))).toBe(true)
+  })
+})

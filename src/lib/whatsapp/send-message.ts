@@ -35,6 +35,7 @@ import {
 } from '@/lib/whatsapp/gupshup-api';
 import {
   gupshupContextMessageId,
+  readStoredGupshupApiToken,
   resolveGupshupAppCredentials,
 } from '@/lib/whatsapp/gupshup-auth';
 import { isGupshupProvider } from '@/lib/whatsapp/provider-mode';
@@ -400,6 +401,13 @@ export async function sendMessageToConversation(
         );
       }
 
+      const storedApiKey = readStoredGupshupApiToken(config.access_token)
+      const selfServe = {
+        sourcePhone: config.display_phone_number,
+        appName: config.gupshup_app_name,
+        apiKey: storedApiKey,
+      }
+
       if (messageType === 'template') {
         const result = await sendGupshupTemplateMessage({
           appId,
@@ -411,10 +419,7 @@ export async function sendMessageToConversation(
           messageParams: structuredParams,
           params: structuredParams.body || [],
           contextMessageId: gupshupReplyContext,
-          selfServe: {
-            sourcePhone: config.display_phone_number,
-            appName: config.gupshup_app_name,
-          },
+          selfServe,
         });
         return result.messageId;
       }
@@ -426,10 +431,7 @@ export async function sendMessageToConversation(
           to: phone,
           text: contentText!,
           contextMessageId: gupshupReplyContext,
-          selfServe: {
-            sourcePhone: config.display_phone_number,
-            appName: config.gupshup_app_name,
-          },
+          selfServe,
         });
         return result.messageId;
       }
@@ -446,10 +448,7 @@ export async function sendMessageToConversation(
           filename:
             messageType === 'document' ? filename || undefined : undefined,
           contextMessageId: gupshupReplyContext,
-          selfServe: {
-            sourcePhone: config.display_phone_number,
-            appName: config.gupshup_app_name,
-          },
+          selfServe,
         });
         return result.messageId;
       }

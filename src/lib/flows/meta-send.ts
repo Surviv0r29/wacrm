@@ -12,7 +12,7 @@ import {
   sendGupshupMediaMessage,
   type GupshupMediaKind,
 } from '@/lib/whatsapp/gupshup-api'
-import { resolveGupshupAppCredentials } from '@/lib/whatsapp/gupshup-auth'
+import { resolveGupshupAppCredentials, readStoredGupshupApiToken } from '@/lib/whatsapp/gupshup-auth'
 import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
@@ -110,6 +110,7 @@ export async function engineSendText(
         selfServe: {
           sourcePhone: config.display_phone_number,
           appName: config.gupshup_app_name,
+          apiKey: readStoredGupshupApiToken(config.access_token),
         },
       })
       return r.messageId
@@ -243,6 +244,7 @@ export async function engineSendMedia(
         selfServe: {
           sourcePhone: config.display_phone_number,
           appName: config.gupshup_app_name,
+          apiKey: readStoredGupshupApiToken(config.access_token),
         },
       })
       return r.messageId
@@ -435,6 +437,7 @@ async function sendInteractiveViaMeta(
         selfServe: {
           sourcePhone: config.display_phone_number,
           appName: config.gupshup_app_name,
+          apiKey: readStoredGupshupApiToken(config.access_token),
         },
       })
       return r.messageId

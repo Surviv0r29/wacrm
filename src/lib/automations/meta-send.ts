@@ -8,6 +8,7 @@ import {
 } from '@/lib/whatsapp/gupshup-api'
 import {
   resolveGupshupAppCredentials,
+  readStoredGupshupApiToken,
 } from '@/lib/whatsapp/gupshup-auth'
 import { isGupshupProvider } from '@/lib/whatsapp/provider-mode'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -114,6 +115,7 @@ async function sendViaWhatsApp(
       const selfServe = {
         sourcePhone: config.display_phone_number,
         appName: config.gupshup_app_name,
+        apiKey: readStoredGupshupApiToken(config.access_token),
       }
 
       if (input.kind === 'template') {

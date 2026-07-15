@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
 import { sendGupshupReactionMessage } from '@/lib/whatsapp/gupshup-api';
-import { resolveGupshupAppCredentials } from '@/lib/whatsapp/gupshup-auth';
+import { resolveGupshupAppCredentials, readStoredGupshupApiToken } from '@/lib/whatsapp/gupshup-auth';
 import { isGupshupProvider } from '@/lib/whatsapp/provider-mode';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
@@ -145,6 +145,7 @@ export async function POST(request: Request) {
           selfServe: {
             sourcePhone: config.display_phone_number,
             appName: config.gupshup_app_name,
+            apiKey: readStoredGupshupApiToken(config.access_token),
           },
         });
       } else {
