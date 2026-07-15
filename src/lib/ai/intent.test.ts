@@ -3,9 +3,25 @@ import {
   classifyIntent,
   INTENT_CLASSIFIER_DEFAULT_MODEL,
   intentIdsFromConfig,
+  isBareGreeting,
   mergeIntentCatalogs,
   slugifyIntentId,
 } from './intent'
+
+describe('isBareGreeting', () => {
+  it('detects short greetings', () => {
+    expect(isBareGreeting('hi')).toBe(true)
+    expect(isBareGreeting('Hello!')).toBe(true)
+    expect(isBareGreeting('hey 👋')).toBe(true)
+    expect(isBareGreeting('good morning')).toBe(true)
+  })
+
+  it('rejects real requests', () => {
+    expect(isBareGreeting('hi, my order is late')).toBe(false)
+    expect(isBareGreeting('hello I need pricing')).toBe(false)
+    expect(isBareGreeting('support please')).toBe(false)
+  })
+})
 
 describe('slugifyIntentId', () => {
   it('normalizes labels', () => {
@@ -97,5 +113,59 @@ describe('classifyIntent', () => {
       intents: [{ id: 'pricing', label: 'Pricing' }],
     })
     expect(result.intentId).toBeNull()
+  })
+
+  it('short-circuits bare greetings without calling Gemini', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await classifyIntent({
+      apiKey: 'key',
+      text: 'hi',
+      intents: [
+        { id: 'support', label: 'Support' },
+        { id: 'new', label: 'New' },
+      ],
+    })
+
+    expect(result).toMatchObject({ intentId: null, confidence: 0 })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('still classifies greetings when catalog has a greeting intent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({ intent: 'greeting', confidence: 0.95 }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await classifyIntent({
+      apiKey: 'key',
+      text: 'hello',
+      intents: [
+        {
+          id: 'greeting',
+          label: 'Greeting',
+          description: 'Customer says hello',
+          examples: ['hi', 'hello'],
+        },
+        { id: 'support', label: 'Support' },
+      ],
+    })
+
+    expect(result.intentId).toBe('greeting')
+    expect(fetchMock).toHaveBeenCalled()
   })
 })

@@ -1179,14 +1179,16 @@ function IntentMatchConfig({
           {
             id: "pricing",
             label: "Pricing",
-            description: "Customer asks about price, plans, or quotes",
+            description:
+              "Asks about price, plans, or quotes — not a bare hi/hello",
             examples: ["How much does it cost?", "Send me pricing"],
           },
           {
             id: "support",
             label: "Support",
-            description: "Customer has a problem or needs help",
-            examples: ["My order is delayed", "I need help"],
+            description:
+              "Has a problem or needs help with an order/account. Do NOT use for bare greetings like hi/hello.",
+            examples: ["My order is delayed", "I need help with my account"],
           },
         ],
         min_confidence: 0.6,
@@ -1220,7 +1222,8 @@ function IntentMatchConfig({
     <div className="space-y-3">
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         Gemini Flash Lite classifies each inbound message into one of these
-        intents using your labels and example phrases. Requires a Gemini API
+        intents using your labels and example phrases. Bare hi/hello returns
+        no match unless you add a Greeting intent. Requires a Gemini API
         key under AI Agents. Use{" "}
         <code className="rounded bg-muted px-1">{"{{ vars.intent }}"}</code> in
         send steps.

@@ -119,7 +119,8 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
         {
           id: 'pricing',
           label: 'Pricing',
-          description: 'Asks about plans, cost, quotes, or buying',
+          description:
+            'Asks about plans, cost, quotes, or buying — not a bare hi/hello',
           examples: [
             'How much does it cost?',
             'Send me a quote',
@@ -130,7 +131,7 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
           id: 'support',
           label: 'Support',
           description:
-            'Has a problem, complaint, or needs help with an existing order',
+            'Has a problem, complaint, or needs help with an existing order. Do NOT use for bare greetings like hi/hello.',
           examples: [
             'My order is delayed',
             'Something is broken',

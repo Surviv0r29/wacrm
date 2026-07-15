@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { MessageTemplate } from "@/types";
+import type { Contact, CustomField, MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,7 +33,27 @@ interface TemplatePickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (template: MessageTemplate, values: TemplateSendValues) => void;
+  /** When set, body/header variables can pull Contact / custom field values. */
+  contact?: Contact | null;
 }
+
+type VarSourceKind = "static" | "contact" | "custom";
+
+interface VarSource {
+  kind: VarSourceKind;
+  /** Contact column, custom field id, or static text */
+  value: string;
+}
+
+const CONTACT_FIELDS = [
+  { value: "name", label: "Contact · Name" },
+  { value: "phone", label: "Contact · Phone" },
+  { value: "email", label: "Contact · Email" },
+  { value: "company", label: "Contact · Company" },
+] as const;
+
+const SELECT_CLASS =
+  "w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none";
 
 function renderBodyPreview(body: string, params: string[]): string {
   return body.replace(/\{\{(\d+)\}\}/g, (_, raw) => {
@@ -73,17 +93,147 @@ function collectVariableSlots(template: MessageTemplate): {
   return { bodyVars, headerVarCount, urlButtonSlots };
 }
 
+function resolveVarSource(
+  source: VarSource,
+  contact: Contact | null | undefined,
+  customValues: Map<string, string>,
+): string {
+  if (source.kind === "static") return source.value;
+  if (!contact) return "";
+  if (source.kind === "contact") {
+    const key = source.value as "name" | "phone" | "email" | "company";
+    return String(contact[key] ?? "");
+  }
+  return customValues.get(source.value) ?? "";
+}
+
+function VariableSourceEditor({
+  label,
+  source,
+  onChange,
+  contact,
+  customFields,
+  customValues,
+  placeholder,
+}: {
+  label: string
+  source: VarSource
+  onChange: (next: VarSource) => void
+  contact?: Contact | null
+  customFields: CustomField[]
+  customValues: Map<string, string>
+  placeholder?: string
+}) {
+  const resolved = resolveVarSource(source, contact, customValues)
+  const canPickFields = Boolean(contact)
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-border/70 bg-background/40 p-2">
+      <Label className="text-xs text-popover-foreground">{label}</Label>
+      {canPickFields ? (
+        <select
+          value={source.kind}
+          onChange={(e) => {
+            const kind = e.target.value as VarSourceKind
+            if (kind === "static") {
+              onChange({ kind: "static", value: "" })
+              return
+            }
+            if (kind === "contact") {
+              onChange({ kind: "contact", value: "name" })
+              return
+            }
+            onChange({
+              kind: "custom",
+              value: customFields[0]?.id ?? "",
+            })
+          }}
+          className={SELECT_CLASS}
+        >
+          <option value="static">Static value</option>
+          <option value="contact">Contact field</option>
+          <option value="custom">Custom field</option>
+        </select>
+      ) : null}
+
+      {source.kind === "static" || !canPickFields ? (
+        <Input
+          value={source.value}
+          onChange={(e) => onChange({ kind: "static", value: e.target.value })}
+          placeholder={placeholder}
+          className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
+        />
+      ) : null}
+
+      {canPickFields && source.kind === "contact" ? (
+        <select
+          value={source.value || "name"}
+          onChange={(e) =>
+            onChange({ kind: "contact", value: e.target.value })
+          }
+          className={SELECT_CLASS}
+        >
+          {CONTACT_FIELDS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
+
+      {canPickFields && source.kind === "custom" ? (
+        <select
+          value={source.value}
+          onChange={(e) =>
+            onChange({ kind: "custom", value: e.target.value })
+          }
+          className={SELECT_CLASS}
+        >
+          {customFields.length === 0 ? (
+            <option value="">No custom fields yet</option>
+          ) : (
+            customFields.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.field_name}
+              </option>
+            ))
+          )}
+        </select>
+      ) : null}
+
+      {canPickFields && source.kind !== "static" ? (
+        <p className="truncate text-[10px] text-muted-foreground">
+          Resolves to:{" "}
+          <span className="text-popover-foreground">
+            {resolved.trim() ? resolved : "(empty)"}
+          </span>
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 export function TemplatePicker({
   open,
   onOpenChange,
   onSelect,
+  contact,
 }: TemplatePickerProps) {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<MessageTemplate | null>(null);
-  const [params, setParams] = useState<string[]>([]);
-  const [headerText, setHeaderText] = useState<string>("");
-  const [buttonParams, setButtonParams] = useState<Record<number, string>>({});
+  const [bodySources, setBodySources] = useState<VarSource[]>([]);
+  const [headerSource, setHeaderSource] = useState<VarSource>({
+    kind: "static",
+    value: "",
+  });
+  const [buttonSources, setButtonSources] = useState<
+    Record<number, VarSource>
+  >({});
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customValues, setCustomValues] = useState<Map<string, string>>(
+    () => new Map(),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -99,6 +249,8 @@ export function TemplatePicker({
       if (!user) {
         if (!cancelled) {
           setTemplates([]);
+          setCustomFields([]);
+          setCustomValues(new Map());
           setLoading(false);
         }
         return;
@@ -108,32 +260,53 @@ export function TemplatePicker({
       // user_id. Templates are account-owned, so filtering on the caller's
       // user_id hid templates that a teammate created — leaving them unable
       // to send approved templates in a shared account.
-      const { data, error } = await supabase
-        .from("message_templates")
-        .select("*")
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
+      const [templatesRes, fieldsRes] = await Promise.all([
+        supabase
+          .from("message_templates")
+          .select("*")
+          .eq("status", "APPROVED")
+          .order("created_at", { ascending: false }),
+        supabase.from("custom_fields").select("*").order("field_name"),
+      ]);
 
       if (cancelled) return;
-      if (error) {
-        console.error("Failed to fetch templates:", error);
+      if (templatesRes.error) {
+        console.error("Failed to fetch templates:", templatesRes.error);
         setTemplates([]);
       } else {
-        setTemplates((data as MessageTemplate[]) ?? []);
+        setTemplates((templatesRes.data as MessageTemplate[]) ?? []);
       }
+      setCustomFields((fieldsRes.data as CustomField[] | null) ?? []);
+
+      if (contact?.id) {
+        const { data: vals } = await supabase
+          .from("contact_custom_values")
+          .select("custom_field_id, value")
+          .eq("contact_id", contact.id);
+        if (!cancelled) {
+          const map = new Map<string, string>();
+          for (const row of vals ?? []) {
+            map.set(row.custom_field_id, row.value ?? "");
+          }
+          setCustomValues(map);
+        }
+      } else if (!cancelled) {
+        setCustomValues(new Map());
+      }
+
       setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, contact?.id]);
 
   function resetSelection() {
     setSelected(null);
-    setParams([]);
-    setHeaderText("");
-    setButtonParams({});
+    setBodySources([]);
+    setHeaderSource({ kind: "static", value: "" });
+    setButtonSources({});
   }
 
   function handleOpenChange(next: boolean) {
@@ -153,35 +326,58 @@ export function TemplatePicker({
       return;
     }
     setSelected(template);
-    setParams(new Array(slots.bodyVars.length).fill(""));
-    setHeaderText("");
-    setButtonParams({});
-  }
-
-  function confirm() {
-    if (!selected) return;
-    const values: TemplateSendValues = { body: params };
-    if (headerText.trim()) values.headerText = headerText.trim();
-    if (Object.keys(buttonParams).length > 0) {
-      values.buttonParams = Object.fromEntries(
-        Object.entries(buttonParams).map(([k, v]) => [Number(k), v.trim()]),
-      );
-    }
-    onSelect(selected, values);
-    handleOpenChange(false);
+    setBodySources(
+      slots.bodyVars.map(() => ({ kind: "static" as const, value: "" })),
+    );
+    setHeaderSource({ kind: "static", value: "" });
+    setButtonSources({});
   }
 
   const slots = useMemo(
     () => (selected ? collectVariableSlots(selected) : null),
     [selected],
   );
+
+  const resolvedBody = useMemo(
+    () =>
+      bodySources.map((s) => resolveVarSource(s, contact, customValues)),
+    [bodySources, contact, customValues],
+  );
+  const resolvedHeader = useMemo(
+    () => resolveVarSource(headerSource, contact, customValues),
+    [headerSource, contact, customValues],
+  );
+  const resolvedButtons = useMemo(() => {
+    const out: Record<number, string> = {};
+    for (const [k, source] of Object.entries(buttonSources)) {
+      out[Number(k)] = resolveVarSource(source, contact, customValues);
+    }
+    return out;
+  }, [buttonSources, contact, customValues]);
+
+  function confirm() {
+    if (!selected || !slots) return;
+    const values: TemplateSendValues = { body: resolvedBody };
+    if (slots.headerVarCount > 0) values.headerText = resolvedHeader.trim();
+    if (Object.keys(resolvedButtons).length > 0) {
+      values.buttonParams = Object.fromEntries(
+        Object.entries(resolvedButtons).map(([k, v]) => [
+          Number(k),
+          v.trim(),
+        ]),
+      );
+    }
+    onSelect(selected, values);
+    handleOpenChange(false);
+  }
+
   const canConfirm =
     !!selected &&
     !!slots &&
-    slots.bodyVars.every((_, i) => (params[i] ?? "").trim().length > 0) &&
-    (slots.headerVarCount === 0 || headerText.trim().length > 0) &&
+    slots.bodyVars.every((_, i) => (resolvedBody[i] ?? "").trim().length > 0) &&
+    (slots.headerVarCount === 0 || resolvedHeader.trim().length > 0) &&
     slots.urlButtonSlots.every(
-      (s) => (buttonParams[s.index] ?? "").trim().length > 0,
+      (s) => (resolvedButtons[s.index] ?? "").trim().length > 0,
     );
 
   return (
@@ -194,7 +390,9 @@ export function TemplatePicker({
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
             {selected
-              ? "Fill in the placeholders to render this template. Meta requires every variable to be set."
+              ? contact
+                ? "Map each placeholder to a Contact field, custom field, or static value."
+                : "Fill in the placeholders to render this template. Meta requires every variable to be set."
               : "Pick an approved WhatsApp template to send to this contact."}
           </DialogDescription>
         </DialogHeader>
@@ -247,11 +445,11 @@ export function TemplatePicker({
             )}
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto">
             <div className="rounded-md border border-border bg-background/50 p-3">
               <p className="mb-1 text-xs text-muted-foreground">Preview</p>
               <p className="whitespace-pre-wrap text-sm text-popover-foreground">
-                {renderBodyPreview(selected.body_text, params)}
+                {renderBodyPreview(selected.body_text, resolvedBody)}
               </p>
               {selected.footer_text && (
                 <p className="mt-2 text-xs italic text-muted-foreground">
@@ -260,51 +458,59 @@ export function TemplatePicker({
               )}
             </div>
             {slots && slots.headerVarCount > 0 && (
-              <div className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
-                  {`Header {{1}}`}
-                </Label>
-                <Input
-                  value={headerText}
-                  onChange={(e) => setHeaderText(e.target.value)}
-                  placeholder="Value for the header variable"
-                  className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
+              <VariableSourceEditor
+                label="Header {{1}}"
+                source={headerSource}
+                onChange={setHeaderSource}
+                contact={contact}
+                customFields={customFields}
+                customValues={customValues}
+                placeholder="Value for the header variable"
+              />
             )}
             {slots?.bodyVars.map((v, i) => (
-              <div key={v} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">{`Body {{${v}}}`}</Label>
-                <Input
-                  value={params[i] ?? ""}
-                  onChange={(e) => {
-                    const next = [...params];
-                    next[i] = e.target.value;
-                    setParams(next);
-                  }}
-                  placeholder={`Value for {{${v}}}`}
-                  className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
+              <VariableSourceEditor
+                key={v}
+                label={`Body {{${v}}}`}
+                source={bodySources[i] ?? { kind: "static", value: "" }}
+                onChange={(next) => {
+                  const copy = [...bodySources];
+                  copy[i] = next;
+                  setBodySources(copy);
+                }}
+                contact={contact}
+                customFields={customFields}
+                customValues={customValues}
+                placeholder={`Value for {{${v}}}`}
+              />
             ))}
             {slots?.urlButtonSlots.map((slot) => (
               <div key={slot.index} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
-                  {`URL button "${slot.text}" — value for `}{`{{1}}`}
-                </Label>
-                <Input
-                  value={buttonParams[slot.index] ?? ""}
-                  onChange={(e) =>
-                    setButtonParams((prev) => ({
+                <VariableSourceEditor
+                  label={`URL button "${slot.text}" — {{1}}`}
+                  source={
+                    buttonSources[slot.index] ?? {
+                      kind: "static",
+                      value: "",
+                    }
+                  }
+                  onChange={(next) =>
+                    setButtonSources((prev) => ({
                       ...prev,
-                      [slot.index]: e.target.value,
+                      [slot.index]: next,
                     }))
                   }
+                  contact={contact}
+                  customFields={customFields}
+                  customValues={customValues}
                   placeholder="URL suffix value"
-                  className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
-                <p className="text-[10px] text-muted-foreground break-all">
-                  Final URL: {slot.url.replace(/\{\{1\}\}/g, buttonParams[slot.index] || "{{1}}")}
+                <p className="break-all px-1 text-[10px] text-muted-foreground">
+                  Final URL:{" "}
+                  {slot.url.replace(
+                    /\{\{1\}\}/g,
+                    resolvedButtons[slot.index] || "{{1}}",
+                  )}
                 </p>
               </div>
             ))}
