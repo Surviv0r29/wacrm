@@ -523,11 +523,172 @@ function DealPipelineFields({
   )
 }
 
+const CONTACT_MERGE_FIELDS = [
+  { value: "name", label: "Contact · Name", token: "{{ contact.name }}" },
+  { value: "phone", label: "Contact · Phone", token: "{{ contact.phone }}" },
+  { value: "email", label: "Contact · Email", token: "{{ contact.email }}" },
+  { value: "company", label: "Contact · Company", token: "{{ contact.company }}" },
+] as const
+
+type TemplateVarSourceKind =
+  | "static"
+  | "contact"
+  | "custom"
+  | "message"
+  | "intent"
+
+function parseTemplateVarSource(raw: string): {
+  kind: TemplateVarSourceKind
+  value: string
+} {
+  const t = raw.trim()
+  if (!t) return { kind: "static", value: "" }
+  if (/^\{\{\s*message\.text\s*\}\}$/.test(t)) {
+    return { kind: "message", value: "" }
+  }
+  if (/^\{\{\s*vars\.intent\s*\}\}$/.test(t)) {
+    return { kind: "intent", value: "" }
+  }
+  const contact = t.match(
+    /^\{\{\s*contact\.(name|phone|email|company)\s*\}\}$/,
+  )
+  if (contact) return { kind: "contact", value: contact[1]! }
+  const custom = t.match(/^\{\{\s*contact\.custom:([0-9a-fA-F-]+)\s*\}\}$/)
+  if (custom) return { kind: "custom", value: custom[1]! }
+  return { kind: "static", value: raw }
+}
+
+function encodeTemplateVarSource(
+  kind: TemplateVarSourceKind,
+  value: string,
+): string {
+  switch (kind) {
+    case "message":
+      return "{{ message.text }}"
+    case "intent":
+      return "{{ vars.intent }}"
+    case "contact": {
+      const field = CONTACT_MERGE_FIELDS.find((f) => f.value === value)
+      return field?.token ?? "{{ contact.name }}"
+    }
+    case "custom":
+      return value ? `{{ contact.custom:${value} }}` : ""
+    case "static":
+    default:
+      return value
+  }
+}
+
+/** Per-placeholder {{1}}/{{2}} editor: pick Contact / custom field / message
+ *  data (same idea as broadcast personalize) or enter a static value. */
+function TemplateVariableField({
+  index,
+  value,
+  onChange,
+}: {
+  index: number
+  value: string
+  onChange: (next: string) => void
+}) {
+  const { customFields } = useResources()
+  const parsed = parseTemplateVarSource(value)
+  const kind = parsed.kind
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-border/70 bg-muted/30 p-2">
+      <p className="text-[11px] font-medium text-muted-foreground">{`{{${index}}}`}</p>
+      <select
+        value={kind}
+        onChange={(e) => {
+          const next = e.target.value as TemplateVarSourceKind
+          if (next === "static") {
+            onChange(kind === "static" ? value : "")
+            return
+          }
+          if (next === "contact") {
+            onChange(encodeTemplateVarSource("contact", "name"))
+            return
+          }
+          if (next === "custom") {
+            const first = customFields[0]?.id ?? ""
+            onChange(encodeTemplateVarSource("custom", first))
+            return
+          }
+          onChange(encodeTemplateVarSource(next, ""))
+        }}
+        className={SELECT_CLASS}
+      >
+        <option value="static">Static value</option>
+        <option value="contact">Contact field</option>
+        <option value="custom">Custom field</option>
+        <option value="message">Inbound message text</option>
+        <option value="intent">Detected intent</option>
+      </select>
+
+      {kind === "static" && (
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={`Value for {{${index}}}`}
+          className="bg-muted text-foreground"
+        />
+      )}
+      {kind === "contact" && (
+        <select
+          value={parsed.value || "name"}
+          onChange={(e) =>
+            onChange(encodeTemplateVarSource("contact", e.target.value))
+          }
+          className={SELECT_CLASS}
+        >
+          {CONTACT_MERGE_FIELDS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      )}
+      {kind === "custom" && (
+        <select
+          value={parsed.value}
+          onChange={(e) =>
+            onChange(encodeTemplateVarSource("custom", e.target.value))
+          }
+          className={SELECT_CLASS}
+        >
+          {customFields.length === 0 ? (
+            <option value="">No custom fields yet</option>
+          ) : (
+            customFields.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.field_name}
+              </option>
+            ))
+          )}
+          {parsed.value &&
+            !customFields.some((f) => f.id === parsed.value) && (
+              <option value={parsed.value}>
+                {parsed.value} (unknown field)
+              </option>
+            )}
+        </select>
+      )}
+      {(kind === "message" || kind === "intent") && (
+        <p className="text-[11px] text-muted-foreground">
+          {kind === "message"
+            ? "Uses the customer’s message that triggered this automation."
+            : "Uses the AI-classified intent id (intent_match automations)."}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** Template dropdown showing approved templates by name + language,
  *  storing both template_name and language. Falls back to manual name +
  *  language inputs when no approved templates are synced yet. Body
- *  placeholders ({{1}}, {{2}}, …) get editable variable fields that
- *  support {{ vars.intent }} / {{ message.text }}. */
+ *  placeholders ({{1}}, {{2}}, …) map to Contact / custom fields or
+ *  static values (same model as broadcast personalize). */
 function SendTemplateFields({
   templateName,
   language,
@@ -599,6 +760,11 @@ function SendTemplateFields({
 
   return (
     <>
+      <p className="text-[11px] text-muted-foreground">
+        WhatsApp always delivers the approved template body below. Map each
+        {"{{n}}"} to a Contact field, custom field, or static value. Sync
+        templates in Settings if the preview looks stale.
+      </p>
       <FieldBlock label="Template">
         <select
           value={current}
@@ -628,27 +794,32 @@ function SendTemplateFields({
           )}
         </select>
       </FieldBlock>
+      {selected?.body_text ? (
+        <FieldBlock label="Approved body (read-only)">
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/60 p-2 text-xs text-foreground">
+            {selected.body_text}
+          </pre>
+        </FieldBlock>
+      ) : null}
       {bodyPlaceholders.length > 0 && (
         <div className="space-y-2">
           <p className="text-[11px] text-muted-foreground">
-            Body variables — use {"{{ message.text }}"} or {"{{ vars.intent }}"}
+            Fill each template variable from Contacts or type a fixed value
           </p>
           {bodyPlaceholders.map((n) => (
-            <FieldBlock key={n} label={`{{${n}}}`}>
-              <Input
-                value={variables?.[String(n)] ?? ""}
-                onChange={(e) =>
-                  onChange({
-                    variables: {
-                      ...(variables ?? {}),
-                      [String(n)]: e.target.value,
-                    },
-                  })
-                }
-                placeholder={`Value for {{${n}}}`}
-                className="bg-muted text-foreground"
-              />
-            </FieldBlock>
+            <TemplateVariableField
+              key={n}
+              index={n}
+              value={variables?.[String(n)] ?? ""}
+              onChange={(next) =>
+                onChange({
+                  variables: {
+                    ...(variables ?? {}),
+                    [String(n)]: next,
+                  },
+                })
+              }
+            />
           ))}
         </div>
       )}
@@ -1418,14 +1589,21 @@ function StepEditor({
   switch (step.step_type) {
     case "send_message":
       return (
-        <FieldBlock label="Message text">
-          <Textarea
-            value={(cfg.text as string) ?? ""}
-            onChange={(e) => set({ text: e.target.value })}
-            placeholder="Hi! Thanks for reaching out…"
-            className="min-h-24 bg-muted text-foreground"
-          />
-        </FieldBlock>
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            Sends this exact free-text (session message). To send a Meta/Gupshup
+            approved template body, use Send Template instead — editing text here
+            does not change an approved WhatsApp template.
+          </p>
+          <FieldBlock label="Message text">
+            <Textarea
+              value={(cfg.text as string) ?? ""}
+              onChange={(e) => set({ text: e.target.value })}
+              placeholder="Hi! Thanks for reaching out…"
+              className="min-h-24 bg-muted text-foreground"
+            />
+          </FieldBlock>
+        </div>
       )
     case "send_template":
       return (

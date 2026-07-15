@@ -1100,19 +1100,24 @@ async function processMessage(
     | 'new_message_received'
     | 'keyword_match'
   )[] = []
-  // Content-level triggers are suppressed when a flow consumed the
-  // message — see the comment block above.
+  // Message-level automations (including welcome / first inbound) are
+  // suppressed when a flow consumed the inbound — otherwise the Flow's
+  // greeting and the Welcome automation both fire, and the customer sees
+  // a different message than the one saved in Automations. Handoff does
+  // not count as consumed (see flowConsumed above).
   if (!flowConsumed) {
     automationTriggers.push('new_message_received', 'keyword_match')
+    // new_contact_created fires only when the webhook just auto-created the
+    // contact row. first_inbound_message fires whenever this is the contact's
+    // first-ever customer-sent message — a superset that also catches
+    // manually-imported contacts sending for the first time.
+    if (contactOutcome.wasCreated) {
+      automationTriggers.unshift('new_contact_created')
+    }
+    if (isFirstInboundMessage) {
+      automationTriggers.unshift('first_inbound_message')
+    }
   }
-  // new_contact_created fires only when the webhook just auto-created the
-  // contact row. first_inbound_message fires whenever this is the contact's
-  // first-ever customer-sent message — a superset that also catches
-  // manually-imported contacts sending for the first time. We dispatch both
-  // so users can pick whichever semantic they want; an automation that
-  // listens to only one trigger runs only when that trigger matches.
-  if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
-  if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
 
   for (const triggerType of automationTriggers) {
     try {

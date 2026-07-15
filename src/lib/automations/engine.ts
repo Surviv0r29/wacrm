@@ -23,6 +23,15 @@ import { intentIdsFromConfig } from '@/lib/ai/intent'
 // Public API
 // ------------------------------------------------------------
 
+export interface AutomationContactMerge {
+  name?: string
+  phone?: string
+  email?: string
+  company?: string
+  /** custom_field_id → value */
+  custom?: Record<string, string>
+}
+
 export interface AutomationContext {
   /** Raw message text, for keyword_match + message_content conditions. */
   message_text?: string
@@ -38,6 +47,12 @@ export interface AutomationContext {
   detected_intent?: string
   /** Classifier confidence 0–1. */
   intent_confidence?: number
+  /**
+   * Contact field snapshot for template / message interpolation
+   * (`{{ contact.name }}`, `{{ contact.custom:<id> }}`, …). Hydrated at
+   * execution time from the live contact row.
+   */
+  contact?: AutomationContactMerge
 }
 
 export interface DispatchInput {
@@ -268,6 +283,15 @@ interface ExecuteArgs {
 
 async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
   const db = supabaseAdmin()
+
+  // Always refresh contact merge fields so template {{1}}/{{2}} mappings
+  // that reference Contact / custom fields resolve against live data
+  // (including after a wait resume).
+  args.context = await hydrateContactMergeFields(
+    args.contactId,
+    args.automation.account_id,
+    args.context,
+  )
 
   const baseQuery = db
     .from('automation_steps')
@@ -724,12 +748,77 @@ function waitMs(cfg: WaitStepConfig): number {
   return Math.max(1_000, cfg.amount * unitMs)
 }
 
+async function hydrateContactMergeFields(
+  contactId: string | null,
+  accountId: string,
+  context: AutomationContext,
+): Promise<AutomationContext> {
+  if (!contactId) return context
+  const db = supabaseAdmin()
+  const { data: contact } = await db
+    .from('contacts')
+    .select('name, phone, email, company')
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (!contact) return context
+
+  const { data: customs } = await db
+    .from('contact_custom_values')
+    .select('custom_field_id, value')
+    .eq('contact_id', contactId)
+
+  const custom: Record<string, string> = {}
+  for (const row of customs ?? []) {
+    custom[row.custom_field_id] = row.value ?? ''
+  }
+
+  return {
+    ...context,
+    contact: {
+      name: contact.name ?? '',
+      phone: contact.phone ?? '',
+      email: contact.email ?? '',
+      company: contact.company ?? '',
+      custom,
+    },
+  }
+}
+
 function interpolate(s: string, args: ExecuteArgs): string {
-  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
-    const [ns, prop] = String(key).split('.')
-    if (ns === 'message' && prop === 'text') return String(args.context.message_text ?? '')
-    if (ns === 'vars' && prop) return String(args.context.vars?.[prop] ?? '')
-    return ''
+  // Allow hyphens/colons so {{ contact.custom:<uuid> }} resolves.
+  return s.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (match, rawKey) => {
+    const key = String(rawKey).trim()
+    const dot = key.indexOf('.')
+    const ns = dot === -1 ? key : key.slice(0, dot)
+    const rest = dot === -1 ? '' : key.slice(dot + 1)
+
+    if (ns === 'message' && rest === 'text') {
+      return String(args.context.message_text ?? '')
+    }
+    if (ns === 'vars' && rest) {
+      return String(args.context.vars?.[rest] ?? '')
+    }
+    if (ns === 'contact') {
+      const c = args.context.contact
+      if (!c) return ''
+      if (
+        rest === 'name' ||
+        rest === 'phone' ||
+        rest === 'email' ||
+        rest === 'company'
+      ) {
+        return String(c[rest] ?? '')
+      }
+      if (rest.startsWith('custom:')) {
+        const id = rest.slice('custom:'.length)
+        return String(c.custom?.[id] ?? '')
+      }
+    }
+    // Leave unknown placeholders intact (e.g. WhatsApp {{1}} pasted into
+    // send_message). Replacing them with "" made greetings look like a
+    // different, clipped message than what the user saved in the builder.
+    return match
   })
 }
 

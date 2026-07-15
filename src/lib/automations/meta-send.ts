@@ -96,27 +96,12 @@ async function sendViaWhatsApp(
 
   let templateRow: MessageTemplate | null = null
   if (input.kind === 'template') {
-    const lang = input.language || 'en_US'
-    let { data } = await db
-      .from('message_templates')
-      .select('*')
-      .eq('account_id', input.accountId)
-      .eq('name', input.templateName)
-      .eq('language', lang)
-      .maybeSingle()
-    if (!data) {
-      const { data: byName } = await db
-        .from('message_templates')
-        .select('*')
-        .eq('account_id', input.accountId)
-        .eq('name', input.templateName)
-        .limit(1)
-        .maybeSingle()
-      data = byName
-    }
-    if (data && isMessageTemplate(data)) {
-      templateRow = data
-    }
+    templateRow = await resolveTemplateRow(
+      db,
+      input.accountId,
+      input.templateName,
+      input.language,
+    )
   }
 
   const attempt = async (phone: string): Promise<string> => {
@@ -206,7 +191,10 @@ async function sendViaWhatsApp(
   }
 
   const content_type = input.kind === 'template' ? 'template' : 'text'
-  const content_text = input.kind === 'text' ? input.text : null
+  const content_text =
+    input.kind === 'text'
+      ? input.text
+      : renderTemplateBodyForInbox(templateRow?.body_text, input.params)
   const template_name = input.kind === 'template' ? input.templateName : null
 
   const { error: msgErr } = await db.from('messages').insert({
@@ -228,13 +216,67 @@ async function sendViaWhatsApp(
     .from('conversations')
     .update({
       last_message_text:
-        input.kind === 'template'
+        content_text?.trim() ||
+        (input.kind === 'template'
           ? `[template:${input.templateName}]`
-          : input.text,
+          : input.text),
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq('id', input.conversationId)
 
   return { whatsapp_message_id: waMessageId }
+}
+
+/** Prefer exact language, then same language family (en ≈ en_US), else first name match. */
+async function resolveTemplateRow(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  templateName: string,
+  language?: string,
+): Promise<MessageTemplate | null> {
+  const lang = language || 'en_US'
+  const { data: exact } = await db
+    .from('message_templates')
+    .select('*')
+    .eq('account_id', accountId)
+    .eq('name', templateName)
+    .eq('language', lang)
+    .maybeSingle()
+  if (exact && isMessageTemplate(exact)) return exact
+
+  const { data: byName } = await db
+    .from('message_templates')
+    .select('*')
+    .eq('account_id', accountId)
+    .eq('name', templateName)
+    .order('created_at', { ascending: false })
+
+  const rows = (byName ?? []).filter(isMessageTemplate)
+  if (rows.length === 0) return null
+
+  const langBase = lang.split(/[_-]/)[0]?.toLowerCase()
+  const family =
+    langBase &&
+    rows.find((r) => (r.language ?? '').split(/[_-]/)[0]?.toLowerCase() === langBase)
+  if (family) return family
+
+  console.warn(
+    '[automations/meta-send] template language miss; using first name match',
+    { templateName, requested: lang, using: rows[0].language },
+  )
+  return rows[0]
+}
+
+function renderTemplateBodyForInbox(
+  bodyText: string | null | undefined,
+  params?: string[],
+): string | null {
+  if (!bodyText) return null
+  if (!params?.length) return bodyText
+  return bodyText.replace(/\{\{\s*(\d+)\s*\}\}/g, (match, n) => {
+    const idx = Number(n) - 1
+    if (!Number.isFinite(idx) || idx < 0 || idx >= params.length) return match
+    return params[idx] ?? match
+  })
 }

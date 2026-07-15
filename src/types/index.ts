@@ -482,6 +482,12 @@ export interface SendMessageStepConfig {
 export interface SendTemplateStepConfig {
   template_name: string;
   language?: string;
+  /**
+   * Positional body params keyed by `"1"`, `"2"`, …
+   * Values may be literal text or merge tokens:
+   * `{{ contact.name }}`, `{{ contact.custom:<id> }}`,
+   * `{{ message.text }}`, `{{ vars.intent }}`.
+   */
   variables?: Record<string, string>;
 }
 
@@ -503,7 +509,7 @@ export interface UpdateContactFieldStepConfig {
    * so this stays backward compatible.
    */
   field: string;
-  /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation at runtime. */
+  /** Supports `{{ vars.* }}` / `{{ message.text }}` / `{{ contact.* }}` interpolation at runtime. */
   value: string;
 }
 
