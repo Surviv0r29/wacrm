@@ -16,6 +16,8 @@ import {
   Users,
   PhoneCall,
   Sparkles,
+  Shield,
+  BookOpen,
   Loader2,
 } from "lucide-react"
 
@@ -45,6 +47,9 @@ import { triggerMeta, formatRelative } from "@/lib/automations/trigger-meta"
 import { cn } from "@/lib/utils"
 
 const TEMPLATE_ORDER: TemplateSlug[] = [
+  "insurance_welcome",
+  "insurance_intent_router",
+  "insurance_follow_up",
   "welcome_message",
   "out_of_office",
   "lead_qualifier",
@@ -53,6 +58,9 @@ const TEMPLATE_ORDER: TemplateSlug[] = [
 ]
 
 const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
+  insurance_welcome: Shield,
+  insurance_intent_router: Sparkles,
+  insurance_follow_up: BookOpen,
   welcome_message: MessageCircle,
   out_of_office: Clock,
   lead_qualifier: Users,
