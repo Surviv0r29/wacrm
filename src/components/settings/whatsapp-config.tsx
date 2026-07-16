@@ -29,6 +29,7 @@ import {
   AccordionContent,
 } from '@/components/ui/accordion';
 import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
+import { GupshupSelfServePanel } from './gupshup-self-serve';
 
 const MASKED_TOKEN = '••••••••••••••••';
 const PLATFORM_GUPSHUP =
@@ -389,43 +390,18 @@ export function WhatsAppConfig() {
     config?.provider === 'gupshup' || (PLATFORM_GUPSHUP && !config);
 
   if (isGupshupManaged) {
-    const displayNumber =
-      config?.display_phone_number ?? config?.phone_number_id ?? '—';
     return (
-      <section className="animate-in fade-in-50 duration-200">
-        <SettingsPanelHead
-          title="WhatsApp connection"
-          description="Your WhatsApp number is provisioned by the platform administrator."
-        />
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground flex items-center gap-2">
-              {connectionStatus === 'connected' ? (
-                <CheckCircle2 className="size-5 text-primary" />
-              ) : (
-                <XCircle className="size-5 text-red-500" />
-              )}
-              {connectionStatus === 'connected' ? 'Connected' : 'Not connected'}
-            </CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {config
-                ? 'This account uses Gupshup for WhatsApp messaging. Contact your administrator to change the assigned number.'
-                : 'No WhatsApp number has been assigned to your account yet.'}
-            </CardDescription>
-          </CardHeader>
-          {config && (
-            <CardContent className="space-y-3 text-sm">
-              <div>
-                <span className="text-muted-foreground">Phone number</span>
-                <p className="font-medium text-foreground">{displayNumber}</p>
-              </div>
-              {statusMessage && connectionStatus !== 'connected' && (
-                <p className="text-amber-200/90">{statusMessage}</p>
-              )}
-            </CardContent>
-          )}
-        </Card>
-      </section>
+      <GupshupSelfServePanel
+        config={config}
+        connectionStatus={connectionStatus}
+        statusMessage={statusMessage}
+        onSaved={() => {
+          if (accountId) {
+            loadedAccountIdRef.current = null;
+            void fetchConfig(accountId);
+          }
+        }}
+      />
     );
   }
 

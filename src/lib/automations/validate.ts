@@ -59,9 +59,15 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       }
       break
     case 'send_template':
-      if (!nonEmpty(c.template_name)) {
-        issues.push({ path: `${path}.template_name`, message: 'template name is required' })
+      if (!nonEmpty(c.template_name) && !nonEmpty(c.template_slot)) {
+        issues.push({
+          path: `${path}.template_name`,
+          message: 'template name or template slot is required',
+        })
       }
+      break
+    case 'create_payment_link':
+      // product_id / product_slug optional — engine falls back to first paid ebook
       break
     case 'add_tag':
     case 'remove_tag':

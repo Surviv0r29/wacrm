@@ -92,7 +92,11 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
 
   return (
     <FlowEditorProvider initialFlow={initialFlow} initialNodes={initialNodes}>
-      <div className="flex h-full min-h-0 flex-col">
+      {/* Same full-bleed height trick as the inbox: cancel dashboard
+          main padding and lock to the viewport below the top header.
+          Without this, `h-full` + flex-1 stage collapses to ~60px
+          inside the scrollable main (canvas looks "crashed"). */}
+      <div className="-m-4 flex h-[calc(100vh-3.5rem)] min-h-0 flex-col overflow-hidden sm:-m-6">
         <EditorHeader />
 
         {/* ---- mode row: view toggle + node-type legend ----
@@ -100,7 +104,7 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
             the legend is lg-only), so there's no empty band above the
             stage on small screens. */}
         {!isMobile && (
-          <div className="flex items-center gap-4 px-6 py-3.5">
+          <div className="flex shrink-0 items-center gap-4 px-6 py-3.5">
             <div
               role="group"
               aria-label="Editor view"
@@ -137,7 +141,7 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
         )}
 
         {/* ---- stage: the active view, owning its own overflow ---- */}
-        <div className="relative mx-6 min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card-2">
+        <div className="relative mx-6 mb-3 min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card-2">
           {effectiveView === "canvas" ? (
             <FlowCanvas />
           ) : (
@@ -148,7 +152,7 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
         </div>
 
         {/* ---- validation / activate-readiness bar ---- */}
-        <div className="px-6 pb-5 pt-3">
+        <div className="shrink-0 px-6 pb-5 pt-1">
           <ValidationPanel />
         </div>
       </div>

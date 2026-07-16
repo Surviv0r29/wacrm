@@ -60,7 +60,7 @@ export interface FlowTemplate {
   name: string;
   description: string;
   /** Used by the gallery to surface a relevant icon. lucide-react name. */
-  icon: "MessageSquare" | "HelpCircle" | "UserPlus";
+  icon: "MessageSquare" | "HelpCircle" | "UserPlus" | "Shield";
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: KeywordTriggerConfig | Record<string, unknown>;
   entry_node_id: string;
@@ -286,13 +286,108 @@ const LEAD_CAPTURE: FlowTemplate = {
 };
 
 // ============================================================
-// Registry
+// 4. Insurance / ebook / advisory welcome (prebuilt for advisors)
 // ============================================================
+const ADVISOR_WELCOME: FlowTemplate = {
+  slug: "advisor_welcome",
+  name: "Advisor welcome menu",
+  description:
+    "Route first contacts to ebook, insurance, advisory, or a human RM — prebuilt for insurance & wealth advisors.",
+  icon: "Shield",
+  trigger_type: "keyword",
+  trigger_config: {
+    keywords: ["hi", "hello", "menu", "start", "help"],
+    match_type: "contains",
+  },
+  entry_node_id: "start",
+  nodes: [
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "welcome" },
+    },
+    {
+      node_key: "welcome",
+      node_type: "send_buttons",
+      config: {
+        text: "Hi! 👋 Welcome. How can we help you today?",
+        footer_text: "General information only — not personalized advice.",
+        buttons: [
+          {
+            reply_id: "ebook",
+            title: "Ebook / learning",
+            next_node_key: "ebook_path",
+          },
+          {
+            reply_id: "insurance",
+            title: "Insurance",
+            next_node_key: "insurance_path",
+          },
+          {
+            reply_id: "advisory",
+            title: "Advisor / RM",
+            next_node_key: "advisory_path",
+          },
+        ],
+      } as SendButtonsNodeConfig,
+    },
+    {
+      node_key: "ebook_path",
+      node_type: "send_message",
+      config: {
+        text: "Our ebooks cover insurance selling, HNI acquisition, and advisor training. Reply with the title you want, or ask for the catalog. Checkout is via Razorpay.",
+        next_node_key: "ask_name",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "insurance_path",
+      node_type: "send_message",
+      config: {
+        text: "We can help with term/health education and connect you to a licensed advisor for quotes.\n\n_General information only. Premiums and eligibility are subject to underwriting._\n\nWhat are you looking for (term / health / review)?",
+        next_node_key: "ask_name",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "advisory_path",
+      node_type: "send_message",
+      config: {
+        text: "Happy to arrange a discovery call with our financial advisor / RM. We'll capture a few details next.",
+        next_node_key: "ask_name",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "ask_name",
+      node_type: "collect_input",
+      config: {
+        prompt_text: "What's your name?",
+        var_key: "name",
+        next_node_key: "ask_email",
+      } as CollectInputNodeConfig,
+    },
+    {
+      node_key: "ask_email",
+      node_type: "collect_input",
+      config: {
+        prompt_text: "Thanks {{vars.name}}! What's the best email to reach you?",
+        var_key: "email",
+        next_node_key: "handoff",
+      } as CollectInputNodeConfig,
+    },
+    {
+      node_key: "handoff",
+      node_type: "handoff",
+      config: {
+        note: "Advisor welcome lead — name={{vars.name}}, email={{vars.email}}. Route to Sales / RM.",
+      } as HandoffNodeConfig,
+    },
+  ],
+};
 
 const TEMPLATES: Record<string, FlowTemplate> = {
   welcome_menu: WELCOME_MENU,
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,
+  advisor_welcome: ADVISOR_WELCOME,
 };
 
 export function getFlowTemplate(slug: string): FlowTemplate | null {

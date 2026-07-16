@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { NODE_META, type BuilderNode } from "../shared";
+import { nodeMeta, type BuilderNode } from "../shared";
 
 export function TextRow({
   label,
@@ -116,12 +116,13 @@ export function NodeKeySelect({
       <SelectContent>
         <SelectItem value="__none__">— None —</SelectItem>
         {options.map((n) => {
-          const Icon = NODE_META[n.node_type].icon;
+          const meta = nodeMeta(n.node_type);
+          const Icon = meta.icon;
           return (
             <SelectItem key={n.node_key} value={n.node_key}>
               <span className="inline-flex items-center gap-1.5">
                 <Icon
-                  className={cn("h-3 w-3", NODE_META[n.node_type].color)}
+                  className={cn("h-3 w-3", meta.color)}
                 />
                 {n.node_key}
               </span>

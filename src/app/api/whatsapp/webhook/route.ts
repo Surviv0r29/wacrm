@@ -21,6 +21,10 @@ import {
   normalizeMessageDeliveryStatus,
   webhookTimestampToIso,
 } from '@/lib/whatsapp/message-delivery-status'
+import {
+  inferLeadInterest,
+  upsertLead,
+} from '@/lib/leads/upsert-lead'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -1005,6 +1009,26 @@ async function processMessage(
   if (msgError) {
     console.error('Error inserting message:', msgError)
     return
+  }
+
+  // Upsert CRM lead for every inbound (idempotent on contact).
+  try {
+    const inboundForInterest =
+      contentText ?? message.text?.body ?? interactiveReplyId ?? ''
+    await upsertLead(supabaseAdmin(), {
+      accountId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      interest: inferLeadInterest(inboundForInterest),
+      source: 'whatsapp',
+      stage: 'new',
+      preserveStage: true,
+    })
+  } catch (err) {
+    console.error(
+      '[webhook] lead upsert failed:',
+      err instanceof Error ? err.message : err,
+    )
   }
 
   // Update conversation

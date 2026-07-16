@@ -229,6 +229,12 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
     case "handoff":
     case "end":
       return [];
+
+    default:
+      // Unknown / future node types (e.g. http_fetch in DB before UI
+      // support) — never return undefined or canvas cards crash on
+      // `slots.length`.
+      return [];
   }
 }
 

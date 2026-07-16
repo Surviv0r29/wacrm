@@ -26,6 +26,25 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, router]);
 
+  // Seed insurance/advisor onboarding pack once per account (idempotent).
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await fetch("/api/onboarding/seed");
+        const statusJson = await status.json().catch(() => ({}));
+        if (cancelled || statusJson.seeded) return;
+        await fetch("/api/onboarding/seed", { method: "POST" });
+      } catch {
+        // Non-blocking — dashboard still works without seed.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">

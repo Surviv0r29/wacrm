@@ -42,6 +42,23 @@ describe("validateStepsForActivation", () => {
     ]);
   });
 
+  it("accepts send_template with template_slot only", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_template",
+        step_config: { template_slot: "welcome" },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("accepts create_payment_link without product fields", () => {
+    const issues = validateStepsForActivation([
+      { step_type: "create_payment_link", step_config: {} },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
   it("checks wait amount and unit boundaries", () => {
     const issues = validateStepsForActivation([
       { step_type: "wait", step_config: { amount: 0, unit: "minutes" } },

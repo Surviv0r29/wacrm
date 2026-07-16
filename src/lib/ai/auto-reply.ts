@@ -47,24 +47,15 @@ export async function dispatchInboundToAiReply(
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
 
-    // Deterministic, user-configured responders win over the LLM — the
-    // caller already excludes messages a Flow consumed. Message-level
-    // automations (`new_message_received` / `keyword_match` /
-    // `intent_match`) are dispatched independently for this same inbound
-    // and may send their own reply, so if the account has any active one
-    // we stand down to avoid double-texting the customer. (Relationship
-    // triggers like `first_inbound_message` don't count — they're not
-    // per-message auto-responders.)
+    // Deterministic keyword / per-message automations win over the LLM.
+    // Intent routers may tag or branch without fully answering — Sales AI
+    // (Flash Lite) still runs unless a classic auto-responder is active.
     const { data: autoResponders } = await db
       .from('automations')
       .select('id')
       .eq('account_id', accountId)
       .eq('is_active', true)
-      .in('trigger_type', [
-        'new_message_received',
-        'keyword_match',
-        'intent_match',
-      ])
+      .in('trigger_type', ['new_message_received', 'keyword_match'])
       .limit(1)
     if (autoResponders && autoResponders.length > 0) return
 

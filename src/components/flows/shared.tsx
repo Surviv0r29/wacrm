@@ -221,7 +221,9 @@ export interface NodeColors {
 }
 
 export function nodeColors(type: NodeType): NodeColors {
-  const t = NODE_HUE[type];
+  // Fall back to `end` for unknown / future DB types so a missing
+  // NODE_HUE entry can't crash the canvas (`Cannot read … 'l'`).
+  const t = NODE_HUE[type] ?? NODE_HUE.end;
   const solid = `oklch(${t.l} ${t.c} ${t.h})`;
   return {
     solid,
@@ -234,6 +236,11 @@ export function nodeColors(type: NodeType): NodeColors {
     // white card). The old fixed-light value only worked on dark.
     text: `color-mix(in oklch, ${solid}, var(--foreground) 38%)`,
   };
+}
+
+/** Safe meta lookup — never returns undefined for unknown types. */
+export function nodeMeta(type: NodeType | string) {
+  return NODE_META[type as NodeType] ?? NODE_META.end;
 }
 
 // ============================================================
@@ -257,7 +264,7 @@ export function NodeIconChip({
   iconSize?: number;
   className?: string;
 }) {
-  const meta = NODE_META[type];
+  const meta = nodeMeta(type);
   const c = nodeColors(type);
   const Icon = meta.icon;
   return (

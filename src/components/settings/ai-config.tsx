@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/select';
 import { SettingsPanelHead } from './settings-panel-head';
 import { AiKnowledgeCard } from './ai-knowledge';
-import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
+import { AI_PROVIDER_DEFAULT_MODEL, defaultSalesSystemPrompt } from '@/lib/ai/defaults';
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from '@/lib/ai/embeddings';
 import type { AiProvider } from '@/lib/ai/types';
 
@@ -52,8 +52,8 @@ export function AiConfig() {
   const [removing, setRemoving] = useState(false);
 
   const [configured, setConfigured] = useState(false);
-  const [provider, setProvider] = useState<AiProvider>('openai');
-  const [model, setModel] = useState(AI_PROVIDER_DEFAULT_MODEL.openai);
+  const [provider, setProvider] = useState<AiProvider>('gemini');
+  const [model, setModel] = useState(AI_PROVIDER_DEFAULT_MODEL.gemini);
   const [apiKey, setApiKey] = useState('');
   const [keyEdited, setKeyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -95,6 +95,11 @@ export function AiConfig() {
         setHasStoredEmbeddingsKey(Boolean(data.has_embeddings_key));
         setEmbeddingsKey(data.has_embeddings_key ? MASKED_KEY : '');
         setEmbeddingsKeyEdited(false);
+      } else {
+        setConfigured(false);
+        setProvider('gemini');
+        setModel(AI_PROVIDER_DEFAULT_MODEL.gemini);
+        setSystemPrompt(defaultSalesSystemPrompt());
       }
     } catch {
       toast.error('Failed to load AI configuration');

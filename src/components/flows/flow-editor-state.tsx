@@ -51,7 +51,7 @@ import {
 } from "@/lib/flows/validate";
 import { unlinkNodeReferences } from "@/lib/flows/edges";
 import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
-import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
+import { NODE_META, nodeMeta, slugify, type BuilderNode, type NodeType } from "./shared";
 
 // ============================================================
 // State shape
@@ -242,13 +242,16 @@ export function FlowEditorProvider({
     name: initialFlow.name,
     description: initialFlow.description ?? "",
     trigger_type: initialFlow.trigger_type,
-    trigger_config: initialFlow.trigger_config as Record<string, unknown>,
+    trigger_config: (initialFlow.trigger_config ?? {}) as Record<
+      string,
+      unknown
+    >,
     entry_node_id: initialFlow.entry_node_id,
     status: initialFlow.status,
     nodes: initialNodes.map((n) => ({
       node_key: n.node_key,
       node_type: n.node_type as NodeType,
-      config: n.config as Record<string, unknown>,
+      config: (n.config ?? {}) as Record<string, unknown>,
       position_x: n.position_x,
       position_y: n.position_y,
     })),

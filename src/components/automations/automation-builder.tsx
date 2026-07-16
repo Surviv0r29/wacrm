@@ -22,6 +22,7 @@ import {
   UserCheck,
   PencilLine,
   Briefcase,
+  CreditCard,
   Hourglass,
   GitBranch,
   Webhook,
@@ -107,6 +108,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   assign_conversation: { label: "Assign Conversation", icon: UserCheck, border: "border-l-primary" },
   update_contact_field: { label: "Update Contact Field", icon: PencilLine, border: "border-l-primary" },
   create_deal: { label: "Create Deal", icon: Briefcase, border: "border-l-primary" },
+  create_payment_link: { label: "Create Payment Link", icon: CreditCard, border: "border-l-emerald-500" },
   wait: { label: "Wait", icon: Hourglass, border: "border-l-border" },
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-primary" },
@@ -121,6 +123,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "assign_conversation",
   "update_contact_field",
   "create_deal",
+  "create_payment_link",
   "wait",
   "condition",
   "send_webhook",
@@ -160,7 +163,7 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
     case "send_message":
       return { text: "" }
     case "send_template":
-      return { template_name: "", language: "en_US" }
+      return { template_name: "", template_slot: "", language: "en_US" }
     case "add_tag":
     case "remove_tag":
       return { tag_id: "" }
@@ -170,6 +173,12 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { field: "name", value: "" }
     case "create_deal":
       return { pipeline_id: "", stage_id: "", title: "", value: 0 }
+    case "create_payment_link":
+      return {
+        product_slug: "",
+        send_message: true,
+        template_slot: "payment_link",
+      }
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":
@@ -691,15 +700,18 @@ function TemplateVariableField({
  *  static values (same model as broadcast personalize). */
 function SendTemplateFields({
   templateName,
+  templateSlot = "",
   language,
   variables,
   onChange,
 }: {
   templateName: string
+  templateSlot?: string
   language: string
   variables?: Record<string, string>
   onChange: (patch: {
     template_name?: string
+    template_slot?: string
     language?: string
     variables?: Record<string, string>
   }) => void
@@ -721,12 +733,27 @@ function SendTemplateFields({
     return [...nums].sort((a, b) => a - b)
   })()
 
+  const slotField = (
+    <FieldBlock label="Template slot (optional)">
+      <Input
+        value={templateSlot}
+        onChange={(e) => onChange({ template_slot: e.target.value })}
+        placeholder="welcome · ebook_offer · payment_link …"
+        className="bg-muted text-foreground"
+      />
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        If set, resolves from Settings → Template slots (overrides name when mapped).
+      </p>
+    </FieldBlock>
+  )
+
   if (templates.length === 0) {
     return (
       <>
+        {slotField}
         <p className="text-[11px] text-muted-foreground">
           No approved templates yet. Sync them under Settings → Templates
-          (or Sync from Gupshup), then pick one here.
+          (or Sync from Gupshup), then pick one here — or map a slot above.
         </p>
         <FieldBlock label="Template name">
           <Input
@@ -760,6 +787,7 @@ function SendTemplateFields({
 
   return (
     <>
+      {slotField}
       <p className="text-[11px] text-muted-foreground">
         WhatsApp always delivers the approved template body below. Map each
         {"{{n}}"} to a Contact field, custom field, or static value. Sync
@@ -1612,6 +1640,7 @@ function StepEditor({
       return (
         <SendTemplateFields
           templateName={(cfg.template_name as string) ?? ""}
+          templateSlot={(cfg.template_slot as string) ?? ""}
           language={(cfg.language as string) ?? ""}
           variables={
             (cfg.variables as Record<string, string> | undefined) ?? undefined
@@ -1694,6 +1723,34 @@ function StepEditor({
               className="bg-muted text-foreground"
             />
           </FieldBlock>
+        </>
+      )
+    case "create_payment_link":
+      return (
+        <>
+          <FieldBlock label="Product slug (optional)">
+            <Input
+              value={(cfg.product_slug as string) ?? ""}
+              onChange={(e) => set({ product_slug: e.target.value })}
+              placeholder="Blank = first paid ebook"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Template slot (optional)">
+            <Input
+              value={(cfg.template_slot as string) ?? "payment_link"}
+              onChange={(e) => set({ template_slot: e.target.value })}
+              placeholder="payment_link"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <label className="flex items-center gap-2 text-sm text-foreground mb-2">
+            <Switch
+              checked={cfg.send_message !== false}
+              onCheckedChange={(v) => set({ send_message: v })}
+            />
+            Send WhatsApp text with payment URL
+          </label>
         </>
       )
     case "wait":
@@ -1826,7 +1883,16 @@ function previewFor(step: BuilderStep): string {
     case "send_message":
       return (step.step_config.text as string) || "no text yet"
     case "send_template":
-      return (step.step_config.template_name as string) || "pick a template"
+      return (
+        (step.step_config.template_slot as string) ||
+        (step.step_config.template_name as string) ||
+        "pick a template / slot"
+      )
+    case "create_payment_link":
+      return (
+        (step.step_config.product_slug as string) ||
+        "Razorpay link (first paid ebook)"
+      )
     case "wait":
       return `${step.step_config.amount ?? "?"} ${step.step_config.unit ?? ""}`
     case "condition":

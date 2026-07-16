@@ -13,11 +13,19 @@ import type {
   UpdateContactFieldStepConfig,
   WaitStepConfig,
   CreateDealStepConfig,
+  CreatePaymentLinkStepConfig,
   AssignConversationStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
 import { intentIdsFromConfig } from '@/lib/ai/intent'
+import { resolveTemplateNameOrSlot } from '@/lib/whatsapp/resolve-template-slot'
+import {
+  createRazorpayPaymentLink,
+  resolveProductForPayment,
+  RazorpayError,
+} from '@/lib/payments/razorpay'
+import { upsertLead } from '@/lib/leads/upsert-lead'
 
 // ------------------------------------------------------------
 // Public API
@@ -427,7 +435,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'send_template': {
       const cfg = step.step_config as SendTemplateStepConfig
       if (!args.contactId) throw new Error('send_template needs a contact')
-      if (!cfg.template_name) throw new Error('send_template needs template_name')
+      const resolved = await resolveTemplateNameOrSlot(db, args.automation.account_id, {
+        templateName: cfg.template_name,
+        templateSlot: cfg.template_slot,
+        language: cfg.language,
+      })
+      if (!resolved?.templateName) {
+        throw new Error(
+          'send_template needs template_name or a mapped template_slot (Settings → Template slots)',
+        )
+      }
       const conversationId = await resolveConversationId(args)
       // Meta / Gupshup templates use positional {{1}}, {{2}}, … placeholders,
       // so we MUST emit params in strict numeric order. Lexicographic sort
@@ -453,11 +470,120 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         userId: args.automation.user_id,
         conversationId,
         contactId: args.contactId,
-        templateName: cfg.template_name,
-        language: cfg.language,
+        templateName: resolved.templateName,
+        language: resolved.language,
         params,
       })
       return `template sent via WhatsApp (${whatsapp_message_id})`
+    }
+
+    case 'create_payment_link': {
+      const cfg = step.step_config as CreatePaymentLinkStepConfig
+      if (!args.contactId) throw new Error('create_payment_link needs a contact')
+
+      const product = await resolveProductForPayment(db, args.automation.account_id, {
+        productId: cfg.product_id,
+        productSlug: cfg.product_slug,
+      })
+      if (!product) {
+        throw new Error(
+          'create_payment_link: no active paid product found — add an ebook in Products',
+        )
+      }
+      const amount =
+        typeof cfg.amount === 'number' && cfg.amount > 0
+          ? cfg.amount
+          : Number(product.price_amount)
+      if (!amount || amount <= 0) {
+        throw new Error('create_payment_link: product has no price')
+      }
+
+      const { data: contact } = await db
+        .from('contacts')
+        .select('name, email, phone')
+        .eq('id', args.contactId)
+        .maybeSingle()
+
+      const lead = await upsertLead(db, {
+        accountId: args.automation.account_id,
+        contactId: args.contactId,
+        conversationId: args.context.conversation_id ?? null,
+        productId: product.id,
+        interest: product.product_type === 'ebook' ? 'ebook' : 'unknown',
+        stage: 'proposal',
+        preserveStage: false,
+      })
+
+      let link
+      try {
+        link = await createRazorpayPaymentLink(db, {
+          accountId: args.automation.account_id,
+          contactId: args.contactId,
+          leadId: lead?.id ?? null,
+          productId: product.id,
+          amount,
+          currency: cfg.currency || product.currency || 'INR',
+          description:
+            cfg.description?.trim() ||
+            `Payment for ${product.name}`,
+          customerName: contact?.name,
+          customerEmail: contact?.email,
+          customerPhone: contact?.phone,
+        })
+      } catch (err) {
+        if (err instanceof RazorpayError) throw err
+        throw err
+      }
+
+      args.context.vars = {
+        ...(args.context.vars ?? {}),
+        payment_url: link.shortUrl,
+        payment_link_id: link.razorpayPaymentLinkId,
+        product_name: product.name,
+      }
+
+      const conversationId = await resolveConversationId(args)
+      const shouldText = cfg.send_message !== false
+      if (shouldText) {
+        const text =
+          `Here's your secure Razorpay link for *${product.name}* ` +
+          `(${link.currency} ${amount}):\n${link.shortUrl}\n\n` +
+          `_Link expires in 48 hours._`
+        await engineSendText({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text,
+        })
+      }
+
+      const slotKey = cfg.template_slot?.trim() || 'payment_link'
+      const slotResolved = await resolveTemplateNameOrSlot(
+        db,
+        args.automation.account_id,
+        { templateSlot: slotKey },
+      )
+      if (slotResolved?.templateName) {
+        try {
+          await engineSendTemplate({
+            accountId: args.automation.account_id,
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            templateName: slotResolved.templateName,
+            language: slotResolved.language,
+            params: [link.shortUrl],
+          })
+        } catch (err) {
+          console.warn(
+            '[automations] payment_link template send failed (text already sent):',
+            err instanceof Error ? err.message : err,
+          )
+        }
+      }
+
+      return `payment link created ${link.shortUrl}`
     }
 
     case 'add_tag': {

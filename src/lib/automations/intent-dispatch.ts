@@ -12,6 +12,7 @@ import {
 } from '@/lib/ai/intent'
 import { supabaseAdmin } from './admin-client'
 import { runAutomationsForTrigger } from './engine'
+import { upsertLead, type LeadInterest } from '@/lib/leads/upsert-lead'
 
 export interface IntentDispatchArgs {
   accountId: string
@@ -114,6 +115,25 @@ export async function dispatchIntentAutomations(
     )
 
     if (!result.intentId) return
+
+    const interestMap: Record<string, LeadInterest> = {
+      ebook: 'ebook',
+      insurance: 'insurance',
+      advisory: 'advisory',
+      buy: 'ebook',
+      pricing: 'ebook',
+    }
+    const interest = interestMap[result.intentId]
+    if (interest) {
+      await upsertLead(db, {
+        accountId,
+        contactId,
+        conversationId,
+        interest,
+        stage: result.intentId === 'buy' ? 'proposal' : 'qualified',
+        preserveStage: false,
+      })
+    }
 
     await runAutomationsForTrigger({
       accountId,

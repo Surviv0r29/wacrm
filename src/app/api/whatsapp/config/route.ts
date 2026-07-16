@@ -103,7 +103,7 @@ export async function GET() {
           reason: 'no_config',
           message:
             process.env.WHATSAPP_PROVIDER === 'gupshup'
-              ? 'WhatsApp has not been assigned to your account yet. Contact your administrator.'
+              ? 'No Gupshup WhatsApp connection yet. Add your credentials in Settings → WhatsApp, or ask a platform admin to assign a number.'
               : 'No WhatsApp configuration saved yet. Fill in the form and click Save Configuration.',
         },
         { status: 200 },
@@ -122,7 +122,7 @@ export async function GET() {
             needs_reset: true,
             provider: 'gupshup',
             message:
-              'The stored Gupshup API key cannot be decrypted. Contact your administrator to re-assign the number.',
+              'The stored Gupshup API key cannot be decrypted. Re-save your API key in Settings → WhatsApp, or ask a platform admin to re-assign the number.',
           },
           { status: 200 },
         )

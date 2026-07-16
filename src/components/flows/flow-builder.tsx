@@ -51,6 +51,7 @@ import {
   NodeIconChip,
   groupNodeTypesByCategory,
   nodeColors,
+  nodeMeta,
   slugify,
   summarizeNode,
   type BuilderNode,
@@ -390,7 +391,7 @@ function NodeCard({
   onRemove: () => void;
   onSetEntry: () => void;
 }) {
-  const meta = NODE_META[node.node_type];
+  const meta = nodeMeta(node.node_type);
   const c = nodeColors(node.node_type);
   const hasError = issues.some((i) => i.severity === 'error');
   const preview = summarizeNode(node);

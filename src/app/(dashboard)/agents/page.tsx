@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Bot, Sparkles, Settings2 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
+import { PrebuiltAgentsOverview } from '@/components/agents/prebuilt-agents-overview';
 import { AiConfig } from '@/components/settings/ai-config';
 
 type Tab = 'playground' | 'setup';
@@ -40,9 +41,12 @@ export default function AgentsPage() {
         </h1>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        Your bring-your-own-key AI agent — set it up, then test it in the
-        playground before it replies to customers in the inbox.
+        Prebuilt Lead Capture, Sales, Follow-up, and Closer agents (Gemini Flash
+        Lite) — add your Gemini key. Knowledge base and prompts are already
+        trained for insurance, ebooks, and advisory selling.
       </p>
+
+      <PrebuiltAgentsOverview />
 
       {decided && (
         <Tabs

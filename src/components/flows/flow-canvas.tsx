@@ -80,6 +80,7 @@ import {
   NodeIconChip,
   groupNodeTypesByCategory,
   nodeColors,
+  nodeMeta,
   summarizeNode,
   type BuilderNode,
   type NodeType,
@@ -132,10 +133,10 @@ function slotColor(nodeType: NodeType, slotId: string, fallback: string) {
 
 function FlowNodeCard({ data, selected }: NodeProps) {
   const { node, isEntry, isFlashed } = data as NodeData;
-  const meta = NODE_META[node.node_type];
+  const meta = nodeMeta(node.node_type);
   const c = nodeColors(node.node_type);
   const summary = summarizeNode(node);
-  const slots = outgoingSlots(node);
+  const slots = outgoingSlots(node) ?? [];
   // Start nodes are entry-only; nothing ever targets them, so they
   // don't need an incoming Handle. Every other node type accepts
   // incoming edges (including terminal handoff / end — they're the
@@ -615,7 +616,7 @@ function NodeEditSheet({
       </Sheet>
     );
   }
-  const meta = NODE_META[node.node_type];
+  const meta = nodeMeta(node.node_type);
   const c = nodeColors(node.node_type);
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>

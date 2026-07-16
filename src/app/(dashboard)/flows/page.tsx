@@ -16,6 +16,7 @@ import {
   HelpCircle,
   UserPlus,
   FileText,
+  Shield,
 } from "lucide-react";
 
 import { useCan } from "@/hooks/use-can";
@@ -70,7 +71,7 @@ interface TemplateSummary {
   slug: string;
   name: string;
   description: string;
-  icon: "MessageSquare" | "HelpCircle" | "UserPlus";
+  icon: "MessageSquare" | "HelpCircle" | "UserPlus" | "Shield";
   trigger_type: string;
   node_count: number;
 }
@@ -79,6 +80,7 @@ const TEMPLATE_ICONS = {
   MessageSquare,
   HelpCircle,
   UserPlus,
+  Shield,
 } as const;
 
 export default function FlowsPage() {
@@ -424,7 +426,7 @@ function FlowCard({
 
 function describeTrigger(flow: FlowRow): string {
   if (flow.trigger_type === "keyword") {
-    const keywords = Array.isArray(flow.trigger_config.keywords)
+    const keywords = Array.isArray(flow.trigger_config?.keywords)
       ? (flow.trigger_config.keywords as string[])
       : [];
     if (keywords.length === 0) return "Triggers on keyword (none set)";

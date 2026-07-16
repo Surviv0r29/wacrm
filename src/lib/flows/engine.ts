@@ -469,6 +469,72 @@ async function executeHandoff(
       .update(convUpdate)
       .eq("id", run.conversation_id);
   }
+
+  // Persist collect_input vars onto the contact + lead when present.
+  if (run.contact_id && run.account_id) {
+    const vars = run.vars ?? {};
+    const contactPatch: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof vars.name === "string" && vars.name.trim()) {
+      contactPatch.name = vars.name.trim();
+    }
+    if (typeof vars.email === "string" && vars.email.trim()) {
+      contactPatch.email = vars.email.trim();
+    }
+    if (typeof vars.company === "string" && vars.company.trim()) {
+      contactPatch.company = vars.company.trim();
+    }
+    if (Object.keys(contactPatch).length > 1) {
+      await db.from("contacts").update(contactPatch).eq("id", run.contact_id);
+    }
+
+    const interestRaw = [
+      typeof vars.interest === "string" ? vars.interest : "",
+      typeof cfg.note === "string" ? cfg.note : "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    let interest: "ebook" | "insurance" | "advisory" | "unknown" = "unknown";
+    if (interestRaw.includes("ebook") || interestRaw.includes("learning")) {
+      interest = "ebook";
+    } else if (interestRaw.includes("insurance")) {
+      interest = "insurance";
+    } else if (
+      interestRaw.includes("advisor") ||
+      interestRaw.includes("advisory") ||
+      interestRaw.includes("rm")
+    ) {
+      interest = "advisory";
+    }
+
+    const noteParts = [
+      cfg.note ?? null,
+      vars.name ? `name=${vars.name}` : null,
+      vars.email ? `email=${vars.email}` : null,
+      vars.company ? `company=${vars.company}` : null,
+    ].filter(Boolean);
+
+    try {
+      const { upsertLead } = await import("@/lib/leads/upsert-lead");
+      await upsertLead(db, {
+        accountId: run.account_id,
+        contactId: run.contact_id,
+        conversationId: run.conversation_id,
+        interest,
+        stage: "qualified",
+        source: "whatsapp_flow",
+        notes: noteParts.join("; ") || null,
+        preserveStage: false,
+      });
+    } catch (err) {
+      console.error(
+        "[flows] lead upsert on handoff failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   await logEvent(db, run.id, "handoff", node.node_key, {
     note: cfg.note ?? null,
     assigned_to: cfg.assign_to ?? null,

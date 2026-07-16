@@ -419,6 +419,7 @@ export type AutomationStepType =
   | 'assign_conversation'
   | 'update_contact_field'
   | 'create_deal'
+  | 'create_payment_link'
   | 'wait'
   | 'condition'
   | 'send_webhook'
@@ -480,7 +481,13 @@ export interface SendMessageStepConfig {
 }
 
 export interface SendTemplateStepConfig {
-  template_name: string;
+  /**
+   * Literal WhatsApp template name, OR a `template_slots.slot_key`
+   * (or `slot:<key>`). Prefer `template_slot` when using platform slots.
+   */
+  template_name?: string;
+  /** Platform template slot key (e.g. `welcome`, `payment_link`). */
+  template_slot?: string;
   language?: string;
   /**
    * Positional body params keyed by `"1"`, `"2"`, …
@@ -489,6 +496,26 @@ export interface SendTemplateStepConfig {
    * `{{ message.text }}`, `{{ vars.intent }}`.
    */
   variables?: Record<string, string>;
+}
+
+export interface CreatePaymentLinkStepConfig {
+  /** Optional product UUID. If omitted, first active paid ebook is used. */
+  product_id?: string;
+  /** Optional product slug (e.g. insurance-selling-mastery). */
+  product_slug?: string;
+  /** Override amount (major units). Defaults to product price. */
+  amount?: number;
+  currency?: string;
+  description?: string;
+  /**
+   * After creating the link, send a WhatsApp text with the URL.
+   * Default true.
+   */
+  send_message?: boolean;
+  /**
+   * Also try `payment_link` (or this) template slot with {{1}} = URL.
+   */
+  template_slot?: string;
 }
 
 export interface TagStepConfig {
@@ -553,6 +580,7 @@ export type AutomationStepConfig =
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
   | CreateDealStepConfig
+  | CreatePaymentLinkStepConfig
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
